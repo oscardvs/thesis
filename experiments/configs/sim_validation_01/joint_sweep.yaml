@@ -1,0 +1,82 @@
+# sim_validation_01 — joint sweep of ceiling cell size × enable_edge_sharpen
+#
+# Resolves the load-bearing empirical assumption in 01's z-inversion theory:
+# does the count-thresholded suppression rule (custom_kernels.py:183) fire
+# reliably at the production ceiling resolution? See README.md for the design.
+
+sweep:
+  matrix:
+    cell_size: [0.10, 0.15, 0.20, 0.30]
+    enable_edge_sharpen: [true, false]
+    # 8 runs total. floor instance fixed at production settings.
+
+  floor:
+    resolution: 0.10
+    map_length: 20.0
+    enable_edge_sharpen: true
+    enable_visibility_cleanup: true
+    enable_drift_compensation: true
+    enable_overlap_clearance: true
+
+  ceiling:
+    # cell_size and enable_edge_sharpen come from the matrix sweep.
+    map_length: 20.0
+    wall_num_thresh: 100              # production default; not swept
+    enable_visibility_cleanup: false  # ADR 0005
+    enable_drift_compensation: false  # defensively redundant (no traversability mask)
+    enable_overlap_clearance: false   # architecturally necessary
+    ramped_height_range_a: 0.0        # exclusion-area neutralised
+    ramped_height_range_b: 1.0
+    ramped_height_range_c: 100.0
+    z_low: 2.05                       # splitter dead-band lower
+    z_high: 2.35                      # splitter dead-band upper
+
+sim_world: construction_site.world
+
+bag:
+  # Either record fresh or reuse. See README.md decision #1.
+  source: 'record_fresh'              # 'record_fresh' | 'reuse_path:/abs/path'
+  duration_s: 90
+  topics:
+    - /perception/fused_points
+    - /tf
+    - /tf_static
+    - /clock
+
+trajectory:
+  # The recorded bag captures whatever the operator drives. Suggested coverage:
+  #   - 0-20s   approach to lowered ceiling section
+  #   - 20-40s  drive under hanging pipes at varied lateral offsets
+  #   - 40-60s  pass-through under ceiling lamps
+  #   - 60-75s  pass-near slab-with-holes section
+  #   - 75-90s  return to flat-ceiling control baseline
+  description: 'varied feature coverage in construction_site.world; see README'
+
+ground_truth:
+  # Extracted from the SDF before the sweep starts. One ground-truth grid per
+  # ceiling cell size (the SDF extraction script resamples to each resolution).
+  script: 'extract_ceiling_ground_truth.py'
+  resample_to_each_cell_size: true
+  output_dir: '/tmp/sim_validation_01_gt'
+
+metrics:
+  # compute_ceiling_metrics.py for each run; partitioned core vs boundary.
+  script: 'compute_ceiling_metrics.py'
+  partition_metrics: true
+  acceptance_thresholds:
+    rmse_core_max_m: 0.15
+    coverage_min: 0.70
+    max_error_max_m: 0.50
+
+instrumentation:
+  # Existing benchmark instrumentation; produces per-callback CSVs.
+  enable_timing_csv: true
+  enable_tegrastats: false           # desktop run; skip on this machine
+
+reporting:
+  # After all 8 runs complete, the runner emits a summary table comparing
+  # RMSE_boundary at edge_sharpen=true vs false at each cell size. The
+  # falsifiable prediction lives in README.md.
+  summary_csv: 'sweep_summary.csv'
+  summary_md: 'sweep_summary.md'
+  interpret_against_prediction: true
