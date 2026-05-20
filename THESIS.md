@@ -73,9 +73,12 @@ These remain open until experimental evidence resolves them. Don't pre-commit by
 
 ## NDA and supervisors
 
-- The robot's internal Hilti project codename is confidential. Use "the platform," "the robot," or "HILDA" only — in code, docs, and commit messages.
-- Confidential numerical values (specific dimensions, weights, internal targets) do not go in committed files. Use symbolic constants pulled from a non-committed config; surface what needs to be supplied.
-- Thesis supervisors are **Dr. Laura Ferranti (TU Delft, CoR)** and **Riccardo Balbi (Hilti AG)**. Robert Babuška supervised an earlier internship only — do not include him on thesis-stage deliverables.
+Two-phase discipline:
+
+- **Working phase (now through the colloquium and most of the thesis-stage writing).** Name Hilti, HILDA, the internal codename, supervisors, specific dimensions, and any other working-state details freely. Trying to maintain redaction discipline during exploratory work makes the docs less precise and harder to follow — the audit trail breaks if we have to talk around the thing we're reasoning about. Operate as if the working repo is private (it should be; verify the GitHub setting before any push to a new remote).
+- **Publication phase (final paper, public thesis deliverable, anything Hilti-facing for distribution).** Single NDA sweep before the artefact leaves the working scope: replace the internal codename with "HILDA" or "the platform," redact specific dimensions/weights/internal targets to symbolic constants pulled from a non-committed config, and check supervisor / partner facility references against whatever the publication forum requires. The sweep is one focused pass, not a discipline maintained continuously.
+
+Thesis supervisors are **Dr. Laura Ferranti (TU Delft, CoR)** and **Riccardo Balbi (Hilti AG)**. Robert Babuška supervised an earlier internship only — do not include him on thesis-stage deliverables.
 
 ## Writing style
 
