@@ -1,0 +1,4 @@
+experiments/results/*
+!experiments/results/README.md
+!experiments/results/.gitkeep
+literature_review/papers/*.pdf

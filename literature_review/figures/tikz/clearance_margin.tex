@@ -1,0 +1,107 @@
+% Variance-aware clearance margin: two-panel comparison.
+% Each panel stacks the margin contributions from each surface upward:
+%   surface --> epsilon_base (gray) --> lambda*sigma (hatched) --> corridor.
+% The high-variance panel widens the hatched band and shrinks the corridor.
+\begin{tikzpicture}[
+    font=\footnotesize,
+    every node/.style={inner sep=1.5pt},
+    surface/.style={line width=1.0pt, draw=black},
+    bound/.style  ={dashed, dash pattern=on 2.5pt off 1.8pt,
+                    line width=0.55pt, draw=black!65},
+    base/.style   ={fill=black!10, draw=none},
+    var/.style    ={pattern=north east lines, pattern color=black!55,
+                    draw=none},
+    corridor/.style={fill=blue!5, draw=none},
+    arr/.style    ={<->, >={Stealth[length=2.4mm,width=1.7mm]},
+                    line width=0.55pt, draw=black!75},
+    lbl/.style    ={font=\scriptsize},
+    title/.style  ={font=\small\bfseries\sffamily},
+    bracket/.style={decorate, decoration={brace, amplitude=2.5pt,
+                                          mirror, raise=1pt},
+                    line width=0.5pt, draw=black!65},
+  ]
+
+  %% --- common geometry --------------------------------------------------
+  \def\W{4.8}     % panel width
+  \def\H{4.0}     % axis top
+  \def\zf{0.50}   % floor surface
+  \def\zc{3.60}   % ceiling surface
+  \def\eb{0.32}   % epsilon_base band thickness
+
+  %% =====================================================================
+  %% Panel 1: well-observed (small variance)
+  %% =====================================================================
+  \begin{scope}
+    \def\sv{0.18} % variance-band thickness
+    % corridor highlight (drawn first, behind everything)
+    \fill[corridor] (0,{\zf+\eb+\sv}) rectangle (\W,{\zc-\eb-\sv});
+    % epsilon_base bands at floor and ceiling
+    \fill[base] (0,\zf) rectangle (\W,{\zf+\eb});
+    \fill[base] (0,{\zc-\eb}) rectangle (\W,\zc);
+    % variance bands (lambda*sigma) on top of epsilon_base
+    \fill[var] (0,{\zf+\eb}) rectangle (\W,{\zf+\eb+\sv});
+    \fill[var] (0,{\zc-\eb-\sv}) rectangle (\W,{\zc-\eb});
+    % effective constraint boundaries
+    \draw[bound] (0,{\zf+\eb+\sv}) -- (\W,{\zf+\eb+\sv});
+    \draw[bound] (0,{\zc-\eb-\sv}) -- (\W,{\zc-\eb-\sv});
+    % true surfaces (drawn after fills so they remain crisp)
+    \draw[surface] (0,\zf) -- (\W,\zf);
+    \draw[surface] (0,\zc) -- (\W,\zc);
+    % surface labels on the right
+    \node[lbl, anchor=west] at (\W,\zf) {$z_{\text{floor}}$};
+    \node[lbl, anchor=west] at (\W,\zc) {$z_{\text{ceil}}$};
+    % axes
+    \draw[->, line width=0.5pt] (0,0) -- (\W+0.4,0)
+          node[right, font=\footnotesize] {$x$};
+    \draw[->, line width=0.5pt] (0,0) -- (0,\H+0.4)
+          node[above, font=\footnotesize] {$z$};
+    % corridor double arrow with inline label
+    \draw[arr] ({\W*0.55},{\zf+\eb+\sv+0.04}) --
+               ({\W*0.55},{\zc-\eb-\sv-0.04});
+    \node[lbl, fill=blue!5, inner sep=1.5pt, font=\scriptsize\itshape]
+          at ({\W*0.55},{(\zf+\zc)/2}) {corridor};
+    % left-side brackets: epsilon_base, then lambda*sigma
+    \draw[bracket] (-0.08,\zf) -- (-0.08,{\zf+\eb});
+    \node[lbl, anchor=east] at (-0.18,{\zf+\eb/2}) {$\varepsilon_{\text{base}}$};
+    \draw[bracket] (-0.08,{\zf+\eb}) -- (-0.08,{\zf+\eb+\sv});
+    \node[lbl, anchor=east] at (-0.18,{\zf+\eb+\sv/2})
+          {$\lambda\sqrt{\sigma_f^2+\sigma_c^2}$};
+    % panel title
+    \node[title, anchor=south] at ({\W/2},{\H+0.55})
+          {Well-observed: tight $\sigma$, tight $\varepsilon$};
+  \end{scope}
+
+  %% =====================================================================
+  %% Panel 2: high variance
+  %% =====================================================================
+  \begin{scope}[xshift=7.6cm]
+    \def\sv{0.78}
+    \fill[corridor] (0,{\zf+\eb+\sv}) rectangle (\W,{\zc-\eb-\sv});
+    \fill[base] (0,\zf) rectangle (\W,{\zf+\eb});
+    \fill[base] (0,{\zc-\eb}) rectangle (\W,\zc);
+    \fill[var]  (0,{\zf+\eb}) rectangle (\W,{\zf+\eb+\sv});
+    \fill[var]  (0,{\zc-\eb-\sv}) rectangle (\W,{\zc-\eb});
+    \draw[bound] (0,{\zf+\eb+\sv}) -- (\W,{\zf+\eb+\sv});
+    \draw[bound] (0,{\zc-\eb-\sv}) -- (\W,{\zc-\eb-\sv});
+    \draw[surface] (0,\zf) -- (\W,\zf);
+    \draw[surface] (0,\zc) -- (\W,\zc);
+    \node[lbl, anchor=west] at (\W,\zf) {$z_{\text{floor}}$};
+    \node[lbl, anchor=west] at (\W,\zc) {$z_{\text{ceil}}$};
+    \draw[->, line width=0.5pt] (0,0) -- (\W+0.4,0)
+          node[right, font=\footnotesize] {$x$};
+    \draw[->, line width=0.5pt] (0,0) -- (0,\H+0.4)
+          node[above, font=\footnotesize] {$z$};
+    \draw[arr] ({\W*0.55},{\zf+\eb+\sv+0.04}) --
+               ({\W*0.55},{\zc-\eb-\sv-0.04});
+    \node[lbl, fill=blue!5, inner sep=1.5pt, font=\scriptsize\itshape]
+          at ({\W*0.55},{(\zf+\zc)/2}) {corridor};
+    \draw[bracket] (-0.08,\zf) -- (-0.08,{\zf+\eb});
+    \node[lbl, anchor=east] at (-0.18,{\zf+\eb/2}) {$\varepsilon_{\text{base}}$};
+    \draw[bracket] (-0.08,{\zf+\eb}) -- (-0.08,{\zf+\eb+\sv});
+    \node[lbl, anchor=east] at (-0.18,{\zf+\eb+\sv/2})
+          {$\lambda\sqrt{\sigma_f^2+\sigma_c^2}$};
+    \node[title, anchor=south] at ({\W/2},{\H+0.55})
+          {High variance: wider $\sigma$, wider $\varepsilon$};
+  \end{scope}
+
+\end{tikzpicture}

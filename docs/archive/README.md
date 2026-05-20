@@ -1,0 +1,5 @@
+# Archive
+
+This directory holds module-doc material superseded by later writing. The convention is **move, don't delete**: superseded files keep their original filenames so that a future "why did the design move?" question is auditable against the historical text rather than against second-hand summaries.
+
+At consolidation (2026-05-19) the four older roadmaps named in `THESIS.md` — `hilda_master_roadmap.md`, `hilda_nmpc_architecture_roadmap.md`, `hilda_ceiling_plane_nmpc_overview_v2.md`, `From_Elevation_Grid_to_NMPC*.md` — were not present in the workspace. The agreed fallback was to treat the Literature Study Report as the canonical source and write `thesis/docs/{00..05}_*.md` directly from §11 of that report, with `ceiling_mapping_implementation.md` (in `elevation_mapping_cupy/`) and the `hilda_ceiling` metapackage as the implementation-side inputs for module 01. Nothing was archived from this pass because nothing was superseded — there was nothing on-disk to supersede. Future archived material follows the same convention: original filename, no edits in-archive, the superseding file in `thesis/docs/` carries the forward pointer.

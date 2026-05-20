@@ -1,0 +1,181 @@
+% Side-view schematic of the HILDA reconfigurable mobile drilling platform.
+% Positions of LiDARs (RoboSense Airy x2) and RGBD cameras follow the
+% drilly_v2 URDF: two 360-deg LiDARs on a sensor mast at z=1.16 m, providing
+% simultaneous floor- and ceiling-coverage; front/rear RGBD cameras at z=0.10 m.
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    >={Stealth[length=2.2mm,width=1.6mm]},
+    line cap=round, line join=round,
+    every node/.style={font=\small},
+    bodyfill/.style={fill=blue!8, draw=blue!50!black, line width=0.6pt},
+    columnfill/.style={fill=gray!15, draw=black!70, line width=0.5pt},
+    sledgefill/.style={fill=orange!25, draw=orange!60!black, line width=0.5pt},
+    drillfill/.style={fill=red!25, draw=red!60!black, line width=0.5pt},
+    wheelfill/.style={fill=gray!40, draw=black, line width=0.6pt},
+    limbline/.style={draw=blue!50!black, line width=1.4pt, line cap=round},
+    lidarfill/.style={fill=green!30, draw=green!40!black, line width=0.5pt},
+    camfill/.style={fill=purple!25, draw=purple!50!black, line width=0.5pt},
+    mastfill/.style={fill=gray!25, draw=black!60, line width=0.4pt},
+    scanray/.style={draw=green!40!black, line width=0.35pt, dashed, dash pattern=on 1.4pt off 1pt},
+    camray/.style={draw=purple!50!black, line width=0.35pt, dashed, dash pattern=on 1.4pt off 1pt},
+    dimline/.style={<->, >={Stealth[length=1.6mm,width=1.2mm]}, draw=black!70, thin},
+    helper/.style={draw=black!40, dashed, thin},
+    statelabel/.style={font=\small\itshape},
+  ]
+
+  %% --- Floor --------------------------------------------------------------
+  \def\floorY{0}
+  \draw[line width=0.6pt] (-4.6,\floorY) -- (4.6,\floorY);
+  \foreach \x in {-4.4,-4.1,...,4.5}
+    \draw[draw=black!60, line width=0.3pt] (\x,\floorY) -- (\x-0.18,\floorY-0.22);
+  \node[anchor=north west, font=\footnotesize] at (-4.6,\floorY-0.05) {floor};
+
+  %% --- Wheels and limbs ---------------------------------------------------
+  \def\wr{0.32}            % wheel radius (drawing units)
+  \def\hipY{1.55}          % hip-plane height
+  \coordinate (WL) at (-2.8,\wr);
+  \coordinate (WR) at ( 2.8,\wr);
+  \coordinate (HL) at (-1.6,\hipY);
+  \coordinate (HR) at ( 1.6,\hipY);
+
+  \draw[wheelfill] (WL) circle (\wr);
+  \draw[wheelfill] (WR) circle (\wr);
+  \fill (WL) circle (0.04); \fill (WR) circle (0.04);
+
+  \draw[limbline] (HL) -- (WL);
+  \draw[limbline] (HR) -- (WR);
+  \fill[blue!50!black] (HL) circle (0.07);
+  \fill[blue!50!black] (HR) circle (0.07);
+
+  % hip-angle indicator (left limb)
+  \draw[helper] (HL) -- ++(0.9,0);
+  \draw[->, draw=black!70, line width=0.5pt]
+    ([shift={(0.55,0)}]HL) arc[start angle=0, end angle=-50, radius=0.55];
+  \node[statelabel] at ($(HL)+(0.95,-0.30)$) {$\theta$};
+
+  %% --- Base body ----------------------------------------------------------
+  \def\baseTop{2.20}
+  \draw[bodyfill] (-1.85,\hipY) rectangle (1.85,\baseTop);
+  \node[font=\footnotesize, text=blue!40!black] at (0,\hipY+0.32) {base};
+
+  %% --- RGBD cameras (front +x and rear -x, mounted at base front/rear) ----
+  % Front RGBD: at +x edge of base, low (URDF: 0.4, 0, 0.10)
+  \def\camY{1.78}
+  \draw[camfill] (1.85,\camY) rectangle ($(1.85,\camY)+(0.18,0.16)$);
+  \coordinate (CF) at ($(1.85,\camY)+(0.18,0.08)$);
+  \draw[camray] (CF) -- ++(0.45, 0.22) -- ++(0,-0.44) -- cycle;
+  \node[font=\footnotesize, text=purple!50!black, anchor=west]
+        at ($(CF)+(0.55,0.30)$) {RGBD\textsubscript{front}};
+
+  % Rear RGBD: at -x edge of base, low (URDF: -0.4, 0, 0.10)
+  \draw[camfill] ($(-1.85,\camY)+(-0.18,0)$) rectangle (-1.85,\camY+0.16);
+  \coordinate (CR) at ($(-1.85,\camY)+(-0.18,0.08)$);
+  \draw[camray] (CR) -- ++(-0.45, 0.22) -- ++(0,-0.44) -- cycle;
+  \node[font=\footnotesize, text=purple!50!black, anchor=east]
+        at ($(CR)+(-0.55,0.30)$) {RGBD\textsubscript{rear}};
+
+  %% --- Drill column (retracted) ------------------------------------------
+  \def\colTop{4.05}
+  \draw[columnfill] (-0.35,\baseTop) rectangle (0.35,\colTop);
+  \node[font=\footnotesize, rotate=90, text=black!60]
+        at (-0.55,(\baseTop+\colTop)/2) {column};
+
+  %% --- Sensor mast + two Airy LiDARs (z=1.16 m in URDF) ------------------
+  % A short post lifts a horizontal profile that carries two LiDARs back-to-back.
+  % We draw the mast offset in +x so it does not collide with the drill column.
+  \def\mastX{0.85}                 % mast x-position
+  \def\profileY{2.95}              % top of mast / base of horizontal profile
+  \def\lidY{3.10}                  % LiDAR centre height
+  % vertical post
+  \draw[mastfill] (\mastX-0.06,\baseTop) rectangle (\mastX+0.06,\profileY);
+  % horizontal sensor profile (heat-sink) carrying the two LiDARs
+  \draw[mastfill] (\mastX-0.30,\profileY) rectangle (\mastX+0.30,\profileY+0.08);
+  % rear LiDAR (on the -x end of the profile, faces rearward)
+  \coordinate (LR) at (\mastX-0.22,\lidY);
+  \draw[lidarfill] ($(LR)+(-0.08,-0.08)$) rectangle ($(LR)+(0.08,0.08)$);
+  % front LiDAR (on the +x end of the profile, faces forward)
+  \coordinate (LF) at (\mastX+0.22,\lidY);
+  \draw[lidarfill] ($(LF)+(-0.08,-0.08)$) rectangle ($(LF)+(0.08,0.08)$);
+  \coordinate (LCTR) at (\mastX,\lidY);
+
+  % Combined coverage: one slim cone up to ceiling. Down-coverage is implied
+  % by the label (drawing it would pierce the base body in a side view).
+  \draw[scanray] (LCTR) -- ($(LCTR)+(-0.55, 2.95)$);
+  \draw[scanray] (LCTR) -- ($(LCTR)+( 0.00, 3.10)$);
+  \draw[scanray] (LCTR) -- ($(LCTR)+( 0.55, 2.95)$);
+
+  % LiDAR label with leader line, placed in the clear region to the right.
+  \node[font=\footnotesize, text=green!30!black, anchor=west]
+        (LIDARLBL) at (1.85,\lidY+0.55) {2$\times$ Airy LiDAR};
+  \node[font=\scriptsize, text=green!30!black, anchor=west]
+        at (1.85,\lidY+0.28) {(floor $+$ ceiling)};
+  \draw[draw=green!40!black, line width=0.35pt]
+        ($(LF)+(0.10,0.04)$) -- (1.83,\lidY+0.55);
+
+  %% --- Sledge (q1 extension) ---------------------------------------------
+  \def\sledgeTop{5.10}
+  \draw[sledgefill] (-0.28,\colTop) rectangle (0.28,\sledgeTop);
+
+  %% --- Drill assembly (q2 sledge adjustment) -----------------------------
+  \def\drillTop{5.85}
+  \draw[drillfill] (-0.22,\sledgeTop) rectangle (0.22,\drillTop);
+  \draw[fill=black!75, draw=black] (-0.05,\drillTop) rectangle (0.05,\drillTop+0.25);
+  \coordinate (DT) at (0,\drillTop+0.25);
+
+  %% --- Ceiling ------------------------------------------------------------
+  \def\ceilY{6.55}
+  \draw[line width=0.6pt] (-4.6,\ceilY) -- (4.6,\ceilY);
+  \foreach \x in {-4.4,-4.1,...,4.5}
+    \draw[draw=black!60, line width=0.3pt] (\x,\ceilY) -- (\x+0.18,\ceilY+0.22);
+  \node[anchor=south west, font=\footnotesize] at (-4.6,\ceilY+0.05) {ceiling};
+
+  %% --- Dimension lines (right side: vertical state stack) ----------------
+  \def\dimX{3.55}
+  % short helpers only — long horizontal dashes across the figure are clutter
+  \draw[helper] (1.85,\hipY) -- (\dimX+0.15,\hipY);
+  \draw[dimline] (\dimX,\floorY) -- (\dimX,\hipY)
+        node[midway, right=1pt, statelabel] {$\hbase$};
+
+  \draw[helper] (0.35,\colTop) -- (\dimX+0.15,\colTop);
+  \draw[dimline] (\dimX,\hipY) -- (\dimX,\colTop)
+        node[midway, right=1pt, statelabel] {$h_{\text{col}}$};
+
+  \draw[helper] (0.28,\sledgeTop) -- (\dimX+0.15,\sledgeTop);
+  \draw[dimline] (\dimX,\colTop) -- (\dimX,\sledgeTop)
+        node[midway, right=1pt, statelabel] {$q_1$};
+
+  \draw[helper] (0.22,\drillTop) -- (\dimX+0.15,\drillTop);
+  \draw[dimline] (\dimX,\sledgeTop) -- (\dimX,\drillTop)
+        node[midway, right=1pt, statelabel] {$q_2$};
+
+  % h_top (floor to drill tip)
+  \def\dimXf{4.45}
+  \draw[helper] (DT) -- (\dimXf+0.15,\drillTop+0.25);
+  \draw[dimline] (\dimXf,\floorY) -- (\dimXf,\drillTop+0.25)
+        node[midway, right=1pt, statelabel] {$\htop$};
+
+  %% --- Wheel radius and limb length (left side) --------------------------
+  \def\dimL{-3.55}
+  \draw[helper] (WL) ++(-\wr,0) -- (\dimL-0.15,\wr);
+  \draw[dimline] (\dimL,\floorY) -- (\dimL,\wr)
+        node[midway, left=1pt, statelabel] {$r$};
+  \node[statelabel, rotate=53, anchor=south]
+        at ($(WL)!0.5!(HL)+(-0.12,0.05)$) {$\ell$};
+
+  %% --- World frame (bottom-left corner) ----------------------------------
+  \begin{scope}[shift={(-4.2,0.25)}]
+    \draw[->, line width=0.6pt] (0,0) -- (0.7,0) node[right=-1pt, font=\footnotesize] {$x$};
+    \draw[->, line width=0.6pt] (0,0) -- (0,0.7) node[above=-1pt, font=\footnotesize] {$z$};
+  \end{scope}
+
+  %% --- Forward velocity and yaw-rate hints -------------------------------
+  % placed above the base body, clear of the RGBD cameras
+  \draw[->, line width=0.6pt, draw=blue!50!black]
+        (1.30,\baseTop+0.30) -- ++(0.55,0)
+        node[right=-1pt, font=\footnotesize, text=blue!40!black] {$v_x$};
+  \draw[->, line width=0.6pt, draw=blue!50!black]
+        (-1.20,\baseTop+0.25) arc[start angle=-20, end angle=210, radius=0.18];
+  \node[font=\footnotesize, text=blue!40!black, anchor=east]
+        at (-1.45,\baseTop+0.30) {$\omega_z$};
+
+\end{tikzpicture}
