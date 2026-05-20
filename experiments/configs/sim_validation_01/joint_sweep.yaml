@@ -34,8 +34,9 @@ sweep:
 sim_world: construction_site.world
 
 bag:
-  # Either record fresh or reuse. See README.md decision #1.
-  source: 'record_fresh'              # 'record_fresh' | 'reuse_path:/abs/path'
+  # 2026-05-20: user records fresh interactively in construction_site.world.
+  # Target path locked here; runner verifies existence before running the sweep.
+  source: 'reuse_path:/tmp/sim_validation_01_bag'
   duration_s: 90
   topics:
     - /perception/fused_points
