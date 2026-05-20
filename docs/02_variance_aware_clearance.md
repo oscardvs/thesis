@@ -106,12 +106,23 @@ Recorded against the `gazebo` branch of `hilda_ceiling` as of 2026-05-19.
 
 ## Open questions
 
+### Sim-phase
+
 - **Package boundary.** `hilda_clearance_field` vs `hilda_ceiling/ceiling_constraint_field` — see implementation status. Decide before phase-2 work starts to avoid moving live code mid-implementation.
-- **Per-surface-class δ_cal vs single constant.** The calibration protocol leaves the choice between a single global δ_cal and a per-surface-class lookup open. A single constant is operationally simpler; per-class is justified if the residual distributions on textured concrete and texture-poor plasterboard differ by more than a stratified hypothesis test rejects at α = 0.05. Decide from the calibration corpus, not by default.
-- **Spline knot spacing.** Committed form (cubic tensor-product, regular knots); free parameter (knot density relative to grid). Pick during phase-3 profiling.
+- **Spline knot spacing.** Committed form (cubic tensor-product, regular knots); free parameter (knot density relative to grid). Pick during phase-3 profiling against the controller solve time.
 - **Controller-side B-spline transport.** Whether the spline reaches the UDOO via shared file, in-process import, or DDS parameter blob is a 05 question; the choice affects the field-update-to-spline-availability latency.
-- **Empirical chance-constraint coverage.** λ = 3 corresponds to 99.7% nominal coverage under the Kalman-Gaussian assumption. The fitted δ_cal recovers nominal coverage on the calibration corpus by construction, but coverage on out-of-distribution surfaces (e.g. unusually specular finishes, glass) is unverified. Worth a sanity run on the phase-6 hardware-validation data.
-- **Independence of floor-ceiling observation noise.** Inherited from 01; the additive variance composition assumes it. The case for independence at the per-cell *Kalman-published* variance is stronger than for full position uncertainty: each layer fuses returns from separate sensor incidence regions with separate count thresholds, and the distance-quadratic noise model is evaluated per-return. The unmodelled-drift channel, by contrast, is genuinely shared between the two layers (same robot pose); δ_cal absorbs this on average rather than per-cell, so independence at the Kalman-variance level is the load-bearing assumption. A correlation check on rosbag pairs of variance maps under stationary observation is the right empirical test. If material covariance shows up at the Kalman-variance level, σ²_c gets a covariance term and the calibration refits.
+- **Provisional λ and ε_base for sim work.** Until δ_cal is fitted, the chance-constraint identity is parameterised at λ = 3 and δ_cal = 0. This is structurally fine for sim — the construction's behaviour as a function of variance is what the sim tests, not its absolute coverage on the partner facility's surfaces — but every controller experiment that consumes `f` from this stage in sim must explicitly carry the "δ_cal pending hardware calibration" annotation in its results manifest. Not a research open question; a discipline-of-results question.
+
+### Hardware-deferred
+
+These are calibration-bound: the empirical signal they want comes from real sensor noise interacting with real localisation drift on the partner facility's surfaces. Sim-data substitutes would measure only what Gazebo's noise model + ground-truth poses produce — a self-consistency check, not a validation.
+
+- **Independence of floor-ceiling observation noise at the Kalman-channel level.** The additive variance composition `σ²_c = σ²_zceil + σ²_zfloor` assumes it; the case for independence is stronger at the Kalman channel (separate returns, separate count thresholds, separate incidence-angle models) than for the full per-cell position covariance (which is shared via the robot pose). The right empirical test is a correlation check on rosbag pairs of variance maps under stationary observation on hardware; if material covariance shows up at the Kalman level, σ²_c gets a covariance term and the calibration refits. Defer to the hardware sprint.
+- **δ_cal calibration corpus.** Three surface classes at the partner facility (textured concrete, texture-poor finishes, oblique-incidence sequences), total-station ground truth, coverage-based objective at λ = 3 (protocol fully specified above). All four inputs are hardware-bound. Defer to the hardware sprint.
+- **Per-surface-class δ_cal vs single constant.** The choice between a single global δ_cal and a per-surface-class lookup is answered by the calibration corpus, not by design. Decide when the corpus is in hand.
+- **Empirical chance-constraint coverage.** λ = 3 corresponds to 99.7% nominal coverage under the Kalman-Gaussian assumption. The fitted δ_cal recovers nominal coverage on the calibration corpus by construction, but coverage on out-of-distribution surfaces (specular finishes, glass) is unverified. Sanity run on phase-6 hardware-validation data.
+
+Everything in this hardware-deferred block is real research work, but none of it gates sim-phase progress. The construction has been designed to consume any δ_cal value the calibration eventually produces; the sim experiments stress the *structural* behaviour (does ε(x, y) propagate correctly to the controller? does the C¹ B-spline interface return sensible gradients? does the OCP solve under varying ε? does the controller behave sensibly when σ²_c spikes locally?) without committing specific calibration values.
 
 ## Cross-references
 
