@@ -53,13 +53,35 @@ def git_state(repo: pathlib.Path) -> tuple[str, bool]:
     return head, dirty
 
 
-def verify_bag(bag_dir: pathlib.Path, required_topics: list[str]) -> None:
+def verify_bag(bag_dir: pathlib.Path, required_topics: list[str],
+               aliases: dict | None = None) -> dict[str, str]:
+    """Verify the bag has each required topic (or an accepted alias).
+
+    Returns a remap dict {actual_topic_in_bag: canonical_topic} for any aliased
+    topic where the canonical name isn't in the bag but an alias is. Pass this
+    to `ros2 bag play --remap` so downstream consumers see the canonical name.
+    """
     if not bag_dir.exists():
         raise FileNotFoundError(f"bag dir not found: {bag_dir}")
     out = subprocess.check_output(["ros2", "bag", "info", str(bag_dir)]).decode()
-    missing = [t for t in required_topics if t not in out]
+    aliases = aliases or {}
+    missing: list[str] = []
+    remap: dict[str, str] = {}
+    for canonical in required_topics:
+        candidates = aliases.get(canonical, [canonical])
+        present = [c for c in candidates if c in out]
+        if not present:
+            missing.append(canonical)
+            continue
+        # If the canonical name isn't in the bag but an alias is, remap.
+        if canonical not in present:
+            remap[present[0]] = canonical
     if missing:
-        raise RuntimeError(f"bag missing required topics: {missing}\n--- ros2 bag info ---\n{out}")
+        raise RuntimeError(
+            f"bag missing required topics (no canonical or alias found): {missing}\n"
+            f"--- ros2 bag info ---\n{out}"
+        )
+    return remap
 
 
 def extract_ground_truth(cell_size: float, world_name: str, out_path: pathlib.Path) -> None:
@@ -78,26 +100,55 @@ def extract_ground_truth(cell_size: float, world_name: str, out_path: pathlib.Pa
     ])
 
 
+# Keys in the sweep config under floor/ceiling that are NOT elevation node params
+# (e.g. splitter knobs). Excluded from the elevation YAML overlay.
+NON_ELEVATION_KEYS = {"z_low", "z_high"}
+
+
+def _load_base_yaml(base_path: pathlib.Path, root_key: str) -> dict:
+    if not base_path.exists():
+        raise FileNotFoundError(f"base YAML not found: {base_path}")
+    data = yaml.safe_load(base_path.read_text())
+    try:
+        return dict(data[root_key]["ros__parameters"])
+    except (KeyError, TypeError):
+        raise RuntimeError(
+            f"base YAML {base_path} missing {root_key}.ros__parameters"
+        )
+
+
+def _overlay_params(base: dict, overrides: dict) -> dict:
+    """Shallow overlay — every key in overrides wins, NON_ELEVATION_KEYS skipped."""
+    merged = dict(base)
+    for k, v in overrides.items():
+        if k in NON_ELEVATION_KEYS:
+            continue
+        merged[k] = v
+    return merged
+
+
 def render_ceiling_yaml(template: dict, cell_size: float, edge_sharpen: bool,
                         out: pathlib.Path) -> pathlib.Path:
-    p = dict(template["sweep"]["ceiling"])
-    p["resolution"] = cell_size
-    p["map_length"] = template["sweep"]["ceiling"]["map_length"]
-    p["enable_edge_sharpen"] = edge_sharpen
-    p["wall_num_thresh"] = template["sweep"]["ceiling"]["wall_num_thresh"]
-    # Required upstream params we always want set on the ceiling instance.
-    for k in ("enable_visibility_cleanup", "enable_drift_compensation",
-              "enable_overlap_clearance", "ramped_height_range_a",
-              "ramped_height_range_b", "ramped_height_range_c"):
-        p[k] = template["sweep"]["ceiling"][k]
-    rendered = {"ceiling_elevation_mapping_node": {"ros__parameters": p}}
+    base = _load_base_yaml(
+        EM_PKG_SHARE / "config" / "setups" / "hilda" / "ceiling_complete.yaml",
+        "ceiling_elevation_mapping_node",
+    )
+    overrides = dict(template["sweep"]["ceiling"])
+    overrides["resolution"] = cell_size
+    overrides["enable_edge_sharpen"] = edge_sharpen
+    merged = _overlay_params(base, overrides)
+    rendered = {"ceiling_elevation_mapping_node": {"ros__parameters": merged}}
     out.write_text(yaml.safe_dump(rendered, sort_keys=False))
     return out
 
 
 def render_floor_yaml(template: dict, out: pathlib.Path) -> pathlib.Path:
-    p = dict(template["sweep"]["floor"])
-    rendered = {"floor_elevation_mapping_node": {"ros__parameters": p}}
+    base = _load_base_yaml(
+        EM_PKG_SHARE / "config" / "setups" / "hilda" / "floor_complete.yaml",
+        "floor_elevation_mapping_node",
+    )
+    merged = _overlay_params(base, template["sweep"]["floor"])
+    rendered = {"floor_elevation_mapping_node": {"ros__parameters": merged}}
     out.write_text(yaml.safe_dump(rendered, sort_keys=False))
     return out
 
@@ -123,7 +174,8 @@ def kill_group(proc: subprocess.Popen) -> None:
 def run_one(label: str, ceiling_yaml: pathlib.Path, floor_yaml: pathlib.Path,
             bag_path: pathlib.Path, gt_path: pathlib.Path,
             splitter_z_low: float, splitter_z_high: float,
-            out_dir: pathlib.Path, drain_s: float = 5.0) -> dict:
+            out_dir: pathlib.Path, drain_s: float = 5.0,
+            bag_remap: dict[str, str] | None = None) -> dict:
     """Launch + replay + collect for one matrix cell."""
     out_dir.mkdir(parents=True, exist_ok=True)
     logs = out_dir / "logs"
@@ -172,6 +224,14 @@ def run_one(label: str, ceiling_yaml: pathlib.Path, floor_yaml: pathlib.Path,
             "-p", "use_sim_time:=true",
             "-p", f"ground_truth_path:={gt_path}",
             "-p", f"diagnostic_plot_path:={plot_path}",
+            # Default is /dual_elevation_mapping_node/ceiling_map_raw; we run
+            # two separate elevation nodes, so point at the ceiling node's topic.
+            "-p", "gridmap_topic:=/ceiling_elevation_mapping_node/ceiling_map_raw",
+            # Full-bag sampling — set high so the node never self-terminates;
+            # finalize() runs on SIGINT at end-of-bag and writes the final JSON
+            # from the last accumulated sample. The default 10 samples covers
+            # only ~2 s of replay and misses most of the trajectory.
+            "-p", "num_samples:=100000",
         ],
     }
 
@@ -181,8 +241,12 @@ def run_one(label: str, ceiling_yaml: pathlib.Path, floor_yaml: pathlib.Path,
             procs[name] = popen_node(cmd, logs / f"{name}.log")
         time.sleep(8.0)  # node init + topic discovery
 
+        # Bag path first; --clock is nargs='?' and would otherwise eat the bag path.
+        play_cmd = ["ros2", "bag", "play", str(bag_path), "--clock"]
+        for src, dst in (bag_remap or {}).items():
+            play_cmd += ["--remap", f"{src}:={dst}"]
         bag_play = subprocess.Popen(
-            ["ros2", "bag", "play", "--clock", str(bag_path)],
+            play_cmd,
             stdout=(logs / "bag_play.log").open("w"),
             stderr=subprocess.STDOUT,
             start_new_session=True,
@@ -208,24 +272,41 @@ def run_one(label: str, ceiling_yaml: pathlib.Path, floor_yaml: pathlib.Path,
         except NameError:
             pass
 
-    # Collect metrics JSON if it landed.
+    # Collect metrics JSON if it landed. compute_ceiling_metrics partitions
+    # cells into "all" (matched live ∩ GT) and "core" (interior, dilated away
+    # from feature boundaries). Both are nested dicts in the JSON.
     summary: dict = {"label": label}
     if metrics_json.exists():
         m = json.loads(metrics_json.read_text())
-        summary["coverage"] = m.get("coverage")
-        summary["RMSE_all"] = m.get("rmse")
-        summary["bias_all"] = m.get("bias")
-        core = m.get("core", {})
-        boundary_pseudo = {k: m.get(k) for k in ("rmse", "max_error", "p95")}
-        summary["RMSE_core"] = core.get("rmse")
-        summary["P95_core"] = core.get("p95")
-        summary["max_core"] = core.get("max_error")
-        # The "all" metrics include both core + boundary; the "boundary" delta
-        # is RMSE_all weighted toward edges (compute_ceiling_metrics partitions
-        # only core; the rest are interpreted as boundary-influenced).
-        summary["RMSE_all_minus_core"] = (
-            (summary["RMSE_all"] or 0) - (summary["RMSE_core"] or 0)
-        )
+        a = m.get("all", {}) or {}
+        c = m.get("core", {}) or {}
+        summary["coverage"] = a.get("coverage")
+        summary["RMSE_all"] = a.get("rmse")
+        summary["P95_all"] = a.get("p95")
+        summary["max_all"] = a.get("max_error")
+        summary["bias_all"] = a.get("bias")
+        summary["n_all"] = a.get("n_compared")
+        summary["RMSE_core"] = c.get("rmse")
+        summary["P95_core"] = c.get("p95")
+        summary["max_core"] = c.get("max_error")
+        summary["bias_core"] = c.get("bias")
+        summary["n_core"] = c.get("n_compared")
+        # Derive boundary stats algebraically: SSE_all = SSE_core + SSE_boundary.
+        # boundary = all − core (set-wise), so n_b = n_all − n_core.
+        try:
+            n_a, n_c_ = summary["n_all"], summary["n_core"]
+            r_a, r_c_ = summary["RMSE_all"], summary["RMSE_core"]
+            n_b = n_a - n_c_
+            if n_b > 0 and r_a is not None and r_c_ is not None:
+                sse_b = n_a * r_a * r_a - n_c_ * r_c_ * r_c_
+                summary["RMSE_boundary"] = (sse_b / n_b) ** 0.5 if sse_b >= 0 else None
+                summary["n_boundary"] = n_b
+            else:
+                summary["RMSE_boundary"] = None
+                summary["n_boundary"] = n_b if n_b else 0
+        except (TypeError, ValueError):
+            summary["RMSE_boundary"] = None
+            summary["n_boundary"] = None
         summary["status"] = "ok"
     else:
         summary["status"] = "no_metrics_json"
@@ -247,12 +328,21 @@ def run_one(label: str, ceiling_yaml: pathlib.Path, floor_yaml: pathlib.Path,
     return summary
 
 
+def _fmt(v, prec=4):
+    if v is None:
+        return "—"
+    if isinstance(v, float):
+        return f"{v:.{prec}f}"
+    return str(v)
+
+
 def write_summary(rows: list[dict], summary_csv: pathlib.Path, summary_md: pathlib.Path) -> None:
     if not rows:
         return
     keys = ["label", "cell_size", "enable_edge_sharpen", "status",
-            "RMSE_all", "RMSE_core", "RMSE_all_minus_core", "P95_core",
-            "max_core", "coverage", "bias_all",
+            "RMSE_all", "RMSE_core", "RMSE_boundary", "P95_all", "P95_core",
+            "max_all", "max_core", "coverage", "bias_all", "bias_core",
+            "n_all", "n_core", "n_boundary",
             "t_total_p50_floor_ms", "t_total_p95_floor_ms", "n_callbacks_floor",
             "t_total_p50_ceiling_ms", "t_total_p95_ceiling_ms", "n_callbacks_ceiling"]
     with summary_csv.open("w", newline="") as f:
@@ -264,27 +354,60 @@ def write_summary(rows: list[dict], summary_csv: pathlib.Path, summary_md: pathl
     md = [
         "# sim_validation_01 joint sweep — summary",
         "",
-        "Columns: RMSE_all = full-map RMSE; RMSE_core = interior cells only; ",
-        "RMSE_all_minus_core ≈ boundary-influenced contribution; t_total_* are p50/p95 ms.",
+        "RMSE_all = full matched-cell RMSE; RMSE_core = interior cells (dilated away from",
+        "feature edges); RMSE_boundary = derived algebraically from SSE_all − SSE_core.",
+        "t_total_* are ceiling-node per-callback latency in ms.",
         "",
-        "| cell | edge_sharpen | RMSE_all | RMSE_core | Δboundary | cov | t_p50_c | t_p95_c | n_c |",
-        "|------|--------------|----------|-----------|-----------|-----|---------|---------|-----|",
+        "| cell | es | RMSE_all | RMSE_core | RMSE_boundary | cov% | bias | n_a | n_c | n_b | t_p50_c | t_p95_c |",
+        "|------|----|----------|-----------|---------------|------|------|-----|-----|-----|---------|---------|",
     ]
     for r in rows:
         md.append(
-            f"| {r.get('cell_size','?')} | {r.get('enable_edge_sharpen','?')} | "
-            f"{r.get('RMSE_all','?')} | {r.get('RMSE_core','?')} | "
-            f"{r.get('RMSE_all_minus_core','?')} | {r.get('coverage','?')} | "
-            f"{r.get('t_total_p50_ceiling_ms','?')} | {r.get('t_total_p95_ceiling_ms','?')} | "
-            f"{r.get('n_callbacks_ceiling','?')} |"
+            "| {cell} | {es} | {ra} | {rc} | {rb} | {cov} | {bias} | {na} | {nc} | {nb} | {tp50} | {tp95} |".format(
+                cell=_fmt(r.get("cell_size"), 2),
+                es="T" if r.get("enable_edge_sharpen") else "F",
+                ra=_fmt(r.get("RMSE_all")),
+                rc=_fmt(r.get("RMSE_core")),
+                rb=_fmt(r.get("RMSE_boundary")),
+                cov=_fmt(r.get("coverage"), 1),
+                bias=_fmt(r.get("bias_all"), 3),
+                na=_fmt(r.get("n_all")),
+                nc=_fmt(r.get("n_core")),
+                nb=_fmt(r.get("n_boundary")),
+                tp50=_fmt(r.get("t_total_p50_ceiling_ms"), 2),
+                tp95=_fmt(r.get("t_total_p95_ceiling_ms"), 2),
+            )
+        )
+    # On/off comparison per cell size
+    md += [
+        "",
+        "## Suppression contribution (RMSE_boundary, edge_sharpen on − off)",
+        "",
+        "| cell | RMSE_b(T) | RMSE_b(F) | Δ(T−F) | RMSE_c(T) | RMSE_c(F) | Δ(T−F) |",
+        "|------|-----------|-----------|--------|-----------|-----------|--------|",
+    ]
+    by_cell: dict = {}
+    for r in rows:
+        by_cell.setdefault(r.get("cell_size"), {})[bool(r.get("enable_edge_sharpen"))] = r
+    for cs in sorted(by_cell.keys()):
+        t = by_cell[cs].get(True, {})
+        f = by_cell[cs].get(False, {})
+        rb_t, rb_f = t.get("RMSE_boundary"), f.get("RMSE_boundary")
+        rc_t, rc_f = t.get("RMSE_core"), f.get("RMSE_core")
+        d_b = (rb_t - rb_f) if (rb_t is not None and rb_f is not None) else None
+        d_c = (rc_t - rc_f) if (rc_t is not None and rc_f is not None) else None
+        md.append(
+            f"| {_fmt(cs, 2)} | {_fmt(rb_t)} | {_fmt(rb_f)} | {_fmt(d_b)} | "
+            f"{_fmt(rc_t)} | {_fmt(rc_f)} | {_fmt(d_c)} |"
         )
     md += [
         "",
         "## Interpretation",
         "",
-        "Compare `RMSE_all_minus_core` (≈ boundary contribution) for `edge_sharpen=true` vs",
-        "`false` at each cell size. Suppression is firing materially where the on/off delta is",
-        "non-trivial. See README.md §Expected pattern for the falsifiable prediction.",
+        "Per README.md §Expected pattern: if suppression fires materially at a given cell",
+        "size, `RMSE_boundary[T] < RMSE_boundary[F]` (negative Δ). A non-negative Δ at",
+        "cell=0.10 m would indicate the count-thresholded rule is not contributing at",
+        "production resolution — see the `wall_num_thresh` follow-up experiment.",
     ]
     summary_md.write_text("\n".join(md) + "\n")
 
@@ -310,12 +433,17 @@ def main() -> int:
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
-    # Bag verification
+    # Bag verification (with alias support — bag may contain /pointcloud/fused_points
+    # or /perception/fused_points; runner remaps to the canonical name at replay).
     bag_src = cfg["bag"]["source"]
     bag_path = pathlib.Path(bag_src.split(":", 1)[1] if bag_src.startswith("reuse_path:") else bag_src)
     required = cfg["bag"]["topics"]
+    aliases = cfg["bag"].get("topic_aliases", {})
+    bag_remap: dict[str, str] = {}
     if not args.dry_run:
-        verify_bag(bag_path, required)
+        bag_remap = verify_bag(bag_path, required, aliases)
+        if bag_remap:
+            print(f"bag remap at replay: {bag_remap}")
 
     # GT extraction per cell size
     gt_dir = pathlib.Path(cfg["ground_truth"]["output_dir"])
@@ -351,7 +479,7 @@ def main() -> int:
         print(f"\n=== {label} ===")
         result = run_one(
             label, ceiling_yaml, floor_yaml, bag_path, gt_paths[cell_size],
-            z_low, z_high, run_out,
+            z_low, z_high, run_out, bag_remap=bag_remap,
         )
         result["cell_size"] = cell_size
         result["enable_edge_sharpen"] = edge_sharpen

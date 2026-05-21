@@ -21,7 +21,13 @@ sweep:
   ceiling:
     # cell_size and enable_edge_sharpen come from the matrix sweep.
     map_length: 20.0
-    wall_num_thresh: 100              # production default; not swept
+    # Production wall_num_thresh = 20 on both instances:
+    # floor_complete.yaml:23, ceiling_complete.yaml:28. The earlier value 100
+    # (with the wrong "production default" comment) is what the 2026-05-21
+    # misconfigured-baseline sweep tested; corrected here per ADR 0006 §F2.
+    # The threshold-sweep extension experiment (wall_num_thresh ∈ {5,10,20,50}
+    # at fixed cell size) lives in a separate config sim_validation_01b/.
+    wall_num_thresh: 20
     enable_visibility_cleanup: false  # ADR 0005
     enable_drift_compensation: false  # defensively redundant (no traversability mask)
     enable_overlap_clearance: false   # architecturally necessary
@@ -43,6 +49,13 @@ bag:
     - /tf
     - /tf_static
     - /clock
+  # Sim publishes both /pointcloud/fused_points (sim-native, every sim consumer)
+  # and /perception/fused_points (hardware-canonical, benchmark + ceiling-mapping)
+  # since the topic_tools/relay added to gazebo_sensors.launch.py on 2026-05-21.
+  # Bags recorded against either name are accepted; runner remaps at replay so
+  # the splitter always sees the canonical /perception/fused_points input.
+  topic_aliases:
+    /perception/fused_points: [/perception/fused_points, /pointcloud/fused_points]
 
 trajectory:
   # The recorded bag captures whatever the operator drives. Suggested coverage:
