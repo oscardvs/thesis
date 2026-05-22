@@ -1,0 +1,121 @@
+# sim_validation_01b — wall_num_thresh sweep at fixed cell size
+#
+# Follow-up to sim_validation_01 (see ADR 0006 §F2 and 2026-W21 entries):
+# yesterday's corrected sweep showed the suppression rule contributes at
+# production wall_num_thresh=20 but the magnitude is small at production cell
+# size (Δ_b = -4.3 mm at 0.10 m). This config holds cell size at the 0.15 m
+# sweet spot from the cell-size sweep and varies wall_num_thresh to find the
+# operating point that maximises -ΔRMSE_boundary without inflating RMSE_core.
+#
+# Matrix uses the generic N-axis form introduced by ADR 0008:
+#   sweep.matrix         — Cartesian product across listed axes
+#   sweep.extra_runs     — explicit list of non-product runs appended after
+# Each axis name maps to a ceiling YAML key (with cell_size → resolution alias).
+
+sweep:
+  matrix:
+    cell_size: [0.15]                  # sweet spot from sim_validation_01
+    wall_num_thresh: [5, 10, 20, 50]   # the actual sweep axis
+    enable_edge_sharpen: [true]        # rule active throughout matrix
+    # 4 product runs.
+
+  # One F baseline at production threshold for two purposes:
+  #   1. Reproduces yesterday's archived cs015_es0 (same bag, same code path
+  #      after the audit fixes, same parameters) — a same-day reproducibility
+  #      check on TF buffer timing + GPU scheduling determinism.
+  #   2. Confirms enable_edge_sharpen=false short-circuits the kernel
+  #      independently of wall_num_thresh (custom_kernels.py:183 — the
+  #      suppression conjunct fails at the flag, so threshold has no effect).
+  # Other F runs at threshold ∈ {5, 10, 50} would be redundant and waste
+  # ~27 min of compute; one F at the production threshold is enough.
+  extra_runs:
+    - {cell_size: 0.15, wall_num_thresh: 20, enable_edge_sharpen: false}
+
+  # Floor instance held at production settings for all runs.
+  floor:
+    resolution: 0.10
+    map_length: 20.0
+    enable_edge_sharpen: true
+    enable_visibility_cleanup: true
+    enable_drift_compensation: true
+    enable_overlap_clearance: true
+
+  # Ceiling defaults shared across all runs; matrix/extra_runs overlay on top.
+  # Mirrors sim_validation_01/joint_sweep.yaml ceiling block, minus the swept
+  # keys (cell_size, wall_num_thresh, enable_edge_sharpen).
+  ceiling:
+    map_length: 20.0
+    enable_visibility_cleanup: false  # ADR 0005
+    enable_drift_compensation: false  # defensively redundant (no traversability mask)
+    enable_overlap_clearance: false   # architecturally necessary
+    ramped_height_range_a: 0.0        # exclusion-area neutralised
+    ramped_height_range_b: 1.0
+    ramped_height_range_c: 100.0
+    z_low: 2.05                       # splitter dead-band lower
+    z_high: 2.35                      # splitter dead-band upper
+
+sim_world: construction_site.world
+
+bag:
+  # Reused from sim_validation_01 — same 514s traversal in construction_site.world.
+  # Persistent location (~/ros2_ws/data/, not /tmp), survives reboot.
+  source: 'reuse_path:/home/odesha/ros2_ws/data/sim_validation_01/bag_2026-05-21_construction_site'
+  duration_s: 90
+  topics:
+    - /perception/fused_points
+    - /tf
+    - /tf_static
+    - /clock
+  topic_aliases:
+    /perception/fused_points: [/perception/fused_points, /pointcloud/fused_points]
+
+trajectory:
+  description: 'shared with sim_validation_01 — same bag, same trajectory; see sim_validation_01/README.md'
+
+ground_truth:
+  # Same extraction script + cell size as sim_validation_01's gt_cs015.npy.
+  # The runner reuses the cached GT if already extracted.
+  script: 'extract_ceiling_ground_truth.py'
+  resample_to_each_cell_size: true
+  output_dir: '/tmp/sim_validation_01_gt'
+
+metrics:
+  script: 'compute_ceiling_metrics.py'
+  partition_metrics: true
+  acceptance_thresholds:
+    rmse_core_max_m: 0.15
+    coverage_min: 0.70
+    max_error_max_m: 0.50
+
+# Auditable thresholds for the postprocess script's recommendation logic and
+# reproducibility check (see sim_validation_01b/README.md §Read-out).
+acceptance:
+  # ε for the recommendation logic: argmin RMSE_b(T) subject to
+  #   RMSE_c(T) <= RMSE_c(F) + core_tolerance_m.
+  # Below this tolerance the core regression is small enough that we accept
+  # a stricter threshold for the boundary gain. 5 mm matches the F5-bias
+  # magnitude scale from yesterday's audit.
+  core_tolerance_m: 0.005
+  # The F baseline at threshold=20 reproduces archived
+  # joint_sweep__04a2e8802fc1_d57b109/cs015_es0. Same bag + same code +
+  # same params should agree to sub-millimetre on RMSE_boundary and RMSE_core.
+  # If |Δ| > reproducibility_tolerance_m on either metric, STOP and investigate
+  # (likely culprits: TF buffer timing, GPU scheduling non-determinism,
+  # framework state from prior runs).
+  reproducibility_tolerance_m: 0.005
+  # Spread tolerance: if the RMSE_boundary spread (max − min) across T-runs
+  # is below this, the postprocess concludes threshold has no measurable
+  # effect within the tested range and recommends keeping production rather
+  # than argmin-hunting in the noise floor. 1 mm sits well above the
+  # reproducibility noise floor (~0.1 mm from yesterday's F-baseline check)
+  # but small enough to flag a real threshold-dependent signal if one exists.
+  spread_tolerance_m: 0.001
+
+instrumentation:
+  enable_timing_csv: true
+  enable_tegrastats: false
+
+reporting:
+  summary_csv: 'sweep_summary.csv'
+  summary_md: 'sweep_summary.md'
+  postprocess_script: 'sim_validation_01b_postprocess.py'

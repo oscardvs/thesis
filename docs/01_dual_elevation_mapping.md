@@ -184,7 +184,21 @@ The corrected sweep against the post-fix pipeline runs after these changes land.
 - **A core/boundary trade-off surfaces at coarser cells**: `RMSE_core` Δ(T−F) at 0.30 m is +18 mm — the rule fires aggressively enough that it drops some valid interior returns and adds noise on flat cells, a net loss on core RMSE despite the boundary win. Sweet spot between 0.15 and 0.20 m cells where boundary improves AND core improves.
 - **Latency**: `t_p50_ceiling` rose from 1.98 ms to 2.52 ms with the TF transform added — desktop-class. Needs re-measurement on Jetson under perception load (Phase 8 / 05).
 
-The `wall_num_thresh` extension experiment (`sim_validation_01b/`, sweep `wall_num_thresh ∈ {5, 10, 20, 50}` at a fixed cell size) is the natural next experiment to find the operating point that maximises the suppression-rule contribution at production cell size. Out of scope for this section; queued.
+The `wall_num_thresh` extension experiment (`sim_validation_01b/`, sweep `wall_num_thresh ∈ {5, 10, 20, 50}` at fixed cell size 0.15 m) is the natural next experiment to find the operating point that maximises the suppression-rule contribution.
+
+**01b corrected-runner result (2026-05-22, config sha `c9d2b0bb724d`).** Runner generalised in place per `decisions/0008-experiment-runner-matrix-generalisation.md` (N-axis matrix + `extra_runs` for the F baseline). 5 runs, all `status: ok`, ~44 min wall. F-baseline reproducibility check against archived `cs015_es0` passes at sub-millimetre (RMSE_boundary Δ = -0.1 mm, RMSE_core Δ = +0.1 mm against the 5 mm acceptance gate).
+
+| wnt | RMSE_b(T) | RMSE_c(T) | Δ_b vs F (mm) |
+|----:|----------:|----------:|--------------:|
+|  5  | 0.6046    | 0.1872    | -6.2          |
+| 10  | 0.6048    | 0.1870    | -6.0          |
+| 20  | 0.6049    | 0.1874    | -5.9          |
+| 50  | 0.6047    | 0.1871    | -6.1          |
+|  F  | 0.6108    | 0.1964    | 0             |
+
+The suppression rule's contribution at cell=0.15 m is a real **~ -6 mm on RMSE_boundary** (consistent with yesterday's −6.3 mm at the same cell), but the rule's contribution is **flat in threshold across {5, 10, 20, 50}** — RMSE_boundary spread across the T-runs is 0.33 mm, well below the 1 mm spread-tolerance and the F-baseline noise floor (~0.1 mm). The README's monotonic-prediction is **falsified**: the threshold within this range is not the lever that tunes the contribution. Likely mechanism: at cell=0.15 m the typical points-per-cell-per-scan on ceiling returns sits either well below or well above all four thresholds, so changing the threshold doesn't change which cells fire. The few cells where the rule fires account for the ~6 mm regardless of threshold.
+
+**Recommendation: stay at production `wall_num_thresh = 20`.** Lowering or raising the threshold within {5, 50} buys nothing measurable. The operating-point question raised by the cell-size sweep is settled at the current sweet spot; no parameter update is recommended on the basis of this evidence. If a future motivation re-opens the question (controller-side absolute-accuracy demand, hardware-density differences), the natural follow-up sweeps are (i) thresholds below 5 to test the below-range hypothesis, or (ii) instrumenting the kernel to count per-cell firings per scan and compare directly across thresholds.
 
 ### Sim-phase validation suite
 

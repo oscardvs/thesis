@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
-"""sim_validation_01 — joint sweep of ceiling cell size × enable_edge_sharpen.
+"""sim_validation sweep runner — generic N-axis matrix over the ceiling YAML.
 
-See thesis/experiments/configs/sim_validation_01/README.md for design.
+Originally built for sim_validation_01 (cell_size × enable_edge_sharpen).
+Generalised on 2026-05-22 per ADR 0008: `sweep.matrix` is an axis-name →
+list-of-values dict; `sweep.extra_runs` is a list of explicit per-run override
+dicts appended after the Cartesian product. The runner is sim-validation-shaped
+(launches splitter + floor + ceiling + compute_ceiling_metrics against a bag);
+experiment-specific commentary lives in per-experiment postprocess scripts.
 
-Per (cell_size, enable_edge_sharpen) the runner:
-  1. Ensures a ground-truth grid exists at the requested resolution.
-  2. Renders a per-run ceiling-instance YAML by overriding the matrix axes.
+Per matrix row + per extra_runs entry the runner:
+  1. Ensures a ground-truth grid exists at the run's cell_size (one extraction
+     per unique cell_size across all runs — pre-deduplicated).
+  2. Renders a per-run ceiling-instance YAML by overlaying the run's axes onto
+     the base ceiling_complete.yaml (cell_size aliases to YAML key `resolution`).
   3. Launches splitter + floor + ceiling + compute_ceiling_metrics as
      subprocess.Popens in their own process group.
-  4. Replays the recorded bag with --clock.
-  5. Waits for the metrics node to exit (it self-terminates when it has
-     accumulated enough samples to evaluate) or for the bag to finish + drain.
-  6. Sends SIGINT to the process group, collects timing CSVs and the metrics
-     JSON, writes a per-run subdirectory.
-After the matrix completes, a sweep_summary.csv and sweep_summary.md compare
-the on/off contribution per cell size — the falsifiable prediction in README.md.
+  4. Replays the recorded bag with --clock (+ --remap if `bag.topic_aliases`).
+  5. Waits for the metrics node to self-terminate, or for the bag to finish + drain.
+  6. Sends SIGINT to the process group, collects timing CSVs + metrics JSON,
+     writes a per-run subdirectory with summary.json (incl. run_overrides).
+
+After all runs complete, a sweep_summary.csv + sweep_summary.md compare the
+per-run metrics; the on/off block triggers automatically when `enable_edge_sharpen`
+is an axis with at least one (T, F) pair after grouping by the other axes.
 
 Usage:
   cd ~/ros2_ws/src/thesis
   python3 experiments/runners/sim_validation_01_joint_sweep.py \\
-      experiments/configs/sim_validation_01/joint_sweep.yaml [--dry-run]
+      experiments/configs/<experiment>/<config>.yaml [--dry-run]
 """
 
 import argparse
@@ -127,15 +135,56 @@ def _overlay_params(base: dict, overrides: dict) -> dict:
     return merged
 
 
-def render_ceiling_yaml(template: dict, cell_size: float, edge_sharpen: bool,
+# Short-encoding map for per-run labels. Unknown axes fall back to f"{key}{value}".
+# See ADR 0008 for the rationale (avoid regex maintenance trap; postprocess
+# scripts read run_overrides from summary.json rather than parsing labels).
+_LABEL_ENCODERS = {
+    "cell_size": lambda v: f"cs{int(v * 100):03d}",
+    "enable_edge_sharpen": lambda v: f"es{int(bool(v))}",
+    "wall_num_thresh": lambda v: f"wnt{int(v):03d}",
+}
+
+
+def encode_label(run_overrides: dict) -> str:
+    parts = []
+    for k in sorted(run_overrides.keys()):
+        enc = _LABEL_ENCODERS.get(k)
+        parts.append(enc(run_overrides[k]) if enc else f"{k}{run_overrides[k]}")
+    return "_".join(parts)
+
+
+def expand_matrix(sweep: dict) -> list[dict]:
+    """Expand `sweep["matrix"]` (axis name → list of values) into the Cartesian
+    product, then append any `sweep["extra_runs"]` items unchanged.
+
+    Each returned item is a dict of axis-name → value, ready to be passed to
+    render_ceiling_yaml as run_overrides.
+    """
+    matrix = sweep.get("matrix", {}) or {}
+    axis_names = list(matrix.keys())
+    runs: list[dict] = []
+    if axis_names:
+        for values in product(*[matrix[a] for a in axis_names]):
+            runs.append(dict(zip(axis_names, values)))
+    for extra in sweep.get("extra_runs", []) or []:
+        runs.append(dict(extra))
+    return runs
+
+
+def render_ceiling_yaml(template: dict, run_overrides: dict,
                         out: pathlib.Path) -> pathlib.Path:
     base = _load_base_yaml(
         EM_PKG_SHARE / "config" / "setups" / "hilda" / "ceiling_complete.yaml",
         "ceiling_elevation_mapping_node",
     )
     overrides = dict(template["sweep"]["ceiling"])
-    overrides["resolution"] = cell_size
-    overrides["enable_edge_sharpen"] = edge_sharpen
+    # Apply run-specific axis values. `cell_size` aliases to the ceiling YAML's
+    # `resolution`; every other key is taken as a direct YAML param name.
+    for k, v in run_overrides.items():
+        if k == "cell_size":
+            overrides["resolution"] = v
+        else:
+            overrides[k] = v
     merged = _overlay_params(base, overrides)
     rendered = {"ceiling_elevation_mapping_node": {"ros__parameters": merged}}
     out.write_text(yaml.safe_dump(rendered, sort_keys=False))
@@ -336,79 +385,132 @@ def _fmt(v, prec=4):
     return str(v)
 
 
-def write_summary(rows: list[dict], summary_csv: pathlib.Path, summary_md: pathlib.Path) -> None:
+def _fmt_axis_value(v) -> str:
+    if isinstance(v, bool):
+        return "T" if v else "F"
+    if isinstance(v, float):
+        return f"{v:g}"
+    return str(v)
+
+
+def write_summary(rows: list[dict], summary_csv: pathlib.Path,
+                  summary_md: pathlib.Path) -> None:
+    """Write a per-run table + (if applicable) an on/off comparison block.
+
+    The output is matrix-shape-agnostic — the axes that appear in the per-run
+    `run_overrides` dict drive the columns. The on/off block triggers whenever
+    `enable_edge_sharpen` appears as an axis and at least one (T, F) pair exists
+    when grouping by the other axes. Experiment-specific interpretation lives
+    in per-experiment postprocess scripts (ADR 0008).
+    """
     if not rows:
         return
-    keys = ["label", "cell_size", "enable_edge_sharpen", "status",
-            "RMSE_all", "RMSE_core", "RMSE_boundary", "P95_all", "P95_core",
-            "max_all", "max_core", "coverage", "bias_all", "bias_core",
-            "n_all", "n_core", "n_boundary",
-            "t_total_p50_floor_ms", "t_total_p95_floor_ms", "n_callbacks_floor",
-            "t_total_p50_ceiling_ms", "t_total_p95_ceiling_ms", "n_callbacks_ceiling"]
+
+    # Discover which axes vary across the runs (preserve a stable order).
+    axis_order: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        for k in (r.get("run_overrides") or {}):
+            if k not in seen:
+                seen.add(k)
+                axis_order.append(k)
+
+    fixed_keys = [
+        "status", "RMSE_all", "RMSE_core", "RMSE_boundary",
+        "P95_all", "P95_core", "max_all", "max_core",
+        "coverage", "bias_all", "bias_core",
+        "n_all", "n_core", "n_boundary",
+        "t_total_p50_floor_ms", "t_total_p95_floor_ms", "n_callbacks_floor",
+        "t_total_p50_ceiling_ms", "t_total_p95_ceiling_ms", "n_callbacks_ceiling",
+    ]
+    csv_keys = ["label"] + axis_order + fixed_keys
     with summary_csv.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=keys)
+        w = csv.DictWriter(f, fieldnames=csv_keys)
         w.writeheader()
         for r in rows:
-            w.writerow({k: r.get(k, "") for k in keys})
+            ov = r.get("run_overrides") or {}
+            row = {k: r.get(k, "") for k in fixed_keys}
+            row["label"] = r.get("label", "")
+            for a in axis_order:
+                row[a] = ov.get(a, "")
+            w.writerow(row)
 
     md = [
-        "# sim_validation_01 joint sweep — summary",
+        "# sweep summary",
         "",
-        "RMSE_all = full matched-cell RMSE; RMSE_core = interior cells (dilated away from",
-        "feature edges); RMSE_boundary = derived algebraically from SSE_all − SSE_core.",
-        "t_total_* are ceiling-node per-callback latency in ms.",
+        "RMSE_all = full matched-cell RMSE; RMSE_core = interior cells (dilated away",
+        "from feature edges); RMSE_boundary = derived algebraically from SSE_all −",
+        "SSE_core. t_total_* are ceiling-node per-callback latency in ms.",
         "",
-        "| cell | es | RMSE_all | RMSE_core | RMSE_boundary | cov% | bias | n_a | n_c | n_b | t_p50_c | t_p95_c |",
-        "|------|----|----------|-----------|---------------|------|------|-----|-----|-----|---------|---------|",
     ]
+    header_axes = " | ".join(axis_order) if axis_order else ""
+    head_left = "label | " + (header_axes + " | " if axis_order else "")
+    md.append(
+        "| " + head_left
+        + "RMSE_all | RMSE_core | RMSE_boundary | cov% | bias | n_a | n_c | n_b | t_p50_c | t_p95_c |"
+    )
+    md.append("|" + "---|" * (1 + len(axis_order) + 10))
     for r in rows:
+        ov = r.get("run_overrides") or {}
+        axis_cells = [_fmt_axis_value(ov.get(a, "")) for a in axis_order]
         md.append(
-            "| {cell} | {es} | {ra} | {rc} | {rb} | {cov} | {bias} | {na} | {nc} | {nb} | {tp50} | {tp95} |".format(
-                cell=_fmt(r.get("cell_size"), 2),
-                es="T" if r.get("enable_edge_sharpen") else "F",
-                ra=_fmt(r.get("RMSE_all")),
-                rc=_fmt(r.get("RMSE_core")),
-                rb=_fmt(r.get("RMSE_boundary")),
-                cov=_fmt(r.get("coverage"), 1),
-                bias=_fmt(r.get("bias_all"), 3),
-                na=_fmt(r.get("n_all")),
-                nc=_fmt(r.get("n_core")),
-                nb=_fmt(r.get("n_boundary")),
-                tp50=_fmt(r.get("t_total_p50_ceiling_ms"), 2),
-                tp95=_fmt(r.get("t_total_p95_ceiling_ms"), 2),
+            "| " + " | ".join(
+                [r.get("label", "?")]
+                + axis_cells
+                + [
+                    _fmt(r.get("RMSE_all")),
+                    _fmt(r.get("RMSE_core")),
+                    _fmt(r.get("RMSE_boundary")),
+                    _fmt(r.get("coverage"), 1),
+                    _fmt(r.get("bias_all"), 3),
+                    _fmt(r.get("n_all")),
+                    _fmt(r.get("n_core")),
+                    _fmt(r.get("n_boundary")),
+                    _fmt(r.get("t_total_p50_ceiling_ms"), 2),
+                    _fmt(r.get("t_total_p95_ceiling_ms"), 2),
+                ]
+            ) + " |"
+        )
+
+    # On/off comparison block — triggers whenever enable_edge_sharpen is an axis
+    # and at least one group has both T and F. Groups by the remaining axes.
+    if "enable_edge_sharpen" in axis_order:
+        other_axes = [a for a in axis_order if a != "enable_edge_sharpen"]
+        groups: dict[tuple, dict[bool, dict]] = {}
+        for r in rows:
+            ov = r.get("run_overrides") or {}
+            key = tuple(ov.get(a) for a in other_axes)
+            groups.setdefault(key, {})[bool(ov.get("enable_edge_sharpen"))] = r
+        paired = sorted(
+            [(k, td) for k, td in groups.items() if True in td and False in td],
+            key=lambda kv: tuple((v if v is not None else 0) for v in kv[0]),
+        )
+        if paired:
+            md += [
+                "",
+                "## Suppression contribution (RMSE_boundary / RMSE_core, edge_sharpen on − off)",
+                "",
+            ]
+            header_axes_md = " | ".join(other_axes) if other_axes else "group"
+            md.append(
+                "| " + header_axes_md
+                + " | RMSE_b(T) | RMSE_b(F) | Δ_b(T−F) | RMSE_c(T) | RMSE_c(F) | Δ_c(T−F) |"
             )
-        )
-    # On/off comparison per cell size
-    md += [
-        "",
-        "## Suppression contribution (RMSE_boundary, edge_sharpen on − off)",
-        "",
-        "| cell | RMSE_b(T) | RMSE_b(F) | Δ(T−F) | RMSE_c(T) | RMSE_c(F) | Δ(T−F) |",
-        "|------|-----------|-----------|--------|-----------|-----------|--------|",
-    ]
-    by_cell: dict = {}
-    for r in rows:
-        by_cell.setdefault(r.get("cell_size"), {})[bool(r.get("enable_edge_sharpen"))] = r
-    for cs in sorted(by_cell.keys()):
-        t = by_cell[cs].get(True, {})
-        f = by_cell[cs].get(False, {})
-        rb_t, rb_f = t.get("RMSE_boundary"), f.get("RMSE_boundary")
-        rc_t, rc_f = t.get("RMSE_core"), f.get("RMSE_core")
-        d_b = (rb_t - rb_f) if (rb_t is not None and rb_f is not None) else None
-        d_c = (rc_t - rc_f) if (rc_t is not None and rc_f is not None) else None
-        md.append(
-            f"| {_fmt(cs, 2)} | {_fmt(rb_t)} | {_fmt(rb_f)} | {_fmt(d_b)} | "
-            f"{_fmt(rc_t)} | {_fmt(rc_f)} | {_fmt(d_c)} |"
-        )
-    md += [
-        "",
-        "## Interpretation",
-        "",
-        "Per README.md §Expected pattern: if suppression fires materially at a given cell",
-        "size, `RMSE_boundary[T] < RMSE_boundary[F]` (negative Δ). A non-negative Δ at",
-        "cell=0.10 m would indicate the count-thresholded rule is not contributing at",
-        "production resolution — see the `wall_num_thresh` follow-up experiment.",
-    ]
+            md.append("|" + "---|" * (max(len(other_axes), 1) + 6))
+            for key, td in paired:
+                t, f = td[True], td[False]
+                rb_t, rb_f = t.get("RMSE_boundary"), f.get("RMSE_boundary")
+                rc_t, rc_f = t.get("RMSE_core"), f.get("RMSE_core")
+                d_b = (rb_t - rb_f) if (rb_t is not None and rb_f is not None) else None
+                d_c = (rc_t - rc_f) if (rc_t is not None and rc_f is not None) else None
+                key_cells = [_fmt_axis_value(v) for v in key] or ["—"]
+                md.append(
+                    "| " + " | ".join(
+                        key_cells + [_fmt(rb_t), _fmt(rb_f), _fmt(d_b),
+                                     _fmt(rc_t), _fmt(rc_f), _fmt(d_c)]
+                    ) + " |"
+                )
+
     summary_md.write_text("\n".join(md) + "\n")
 
 
@@ -445,10 +547,22 @@ def main() -> int:
         if bag_remap:
             print(f"bag remap at replay: {bag_remap}")
 
-    # GT extraction per cell size
+    # Expand the matrix (Cartesian product of axes) and append extra_runs.
+    # Each `run_overrides` is a dict of axis-name → value applied to the ceiling
+    # YAML (with cell_size → resolution alias). See ADR 0008.
+    runs = expand_matrix(cfg["sweep"])
+    if not runs:
+        raise RuntimeError(
+            f"no runs to execute — `sweep.matrix` empty and no `sweep.extra_runs` "
+            f"in {args.config}"
+        )
+
+    # GT extraction: one grid per unique cell_size across both the matrix and
+    # any extra_runs (pre-deduplicate to avoid re-extracting or mis-keying).
     gt_dir = pathlib.Path(cfg["ground_truth"]["output_dir"])
+    unique_cell_sizes = sorted({r["cell_size"] for r in runs if "cell_size" in r})
     gt_paths: dict[float, pathlib.Path] = {}
-    for cs in cfg["sweep"]["matrix"]["cell_size"]:
+    for cs in unique_cell_sizes:
         gt_paths[cs] = gt_dir / f"gt_cs{int(cs * 100):03d}.npy"
         if not args.dry_run:
             extract_ground_truth(cs, cfg["sim_world"], gt_paths[cs])
@@ -462,27 +576,35 @@ def main() -> int:
     z_high = cfg["sweep"]["ceiling"]["z_high"]
 
     rows: list[dict] = []
-    for cell_size, edge_sharpen in product(
-        cfg["sweep"]["matrix"]["cell_size"],
-        cfg["sweep"]["matrix"]["enable_edge_sharpen"],
-    ):
-        label = f"cs{int(cell_size * 100):03d}_es{int(edge_sharpen)}"
+    for run_overrides in runs:
+        if "cell_size" not in run_overrides:
+            raise RuntimeError(
+                f"run is missing required `cell_size` key: {run_overrides}"
+            )
+        label = encode_label(run_overrides)
         ceiling_yaml = render_ceiling_yaml(
-            cfg, cell_size, edge_sharpen, rendered_dir / f"{label}.yaml",
+            cfg, run_overrides, rendered_dir / f"{label}.yaml",
         )
         run_out = out / label
 
         if args.dry_run:
-            print(f"[dry-run] {label}: ceiling_yaml={ceiling_yaml} gt={gt_paths[cell_size]} -> {run_out}")
+            print(
+                f"[dry-run] {label}: ceiling_yaml={ceiling_yaml} "
+                f"gt={gt_paths[run_overrides['cell_size']]} overrides={run_overrides} -> {run_out}"
+            )
             continue
 
         print(f"\n=== {label} ===")
         result = run_one(
-            label, ceiling_yaml, floor_yaml, bag_path, gt_paths[cell_size],
+            label, ceiling_yaml, floor_yaml, bag_path,
+            gt_paths[run_overrides["cell_size"]],
             z_low, z_high, run_out, bag_remap=bag_remap,
         )
-        result["cell_size"] = cell_size
-        result["enable_edge_sharpen"] = edge_sharpen
+        result["label"] = label
+        result["run_overrides"] = dict(run_overrides)
+        # Top-level mirrors for backward-compat consumers (CSV column readers).
+        for k, v in run_overrides.items():
+            result.setdefault(k, v)
         rows.append(result)
         (run_out / "summary.json").write_text(json.dumps(result, indent=2))
 
