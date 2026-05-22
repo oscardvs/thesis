@@ -40,9 +40,12 @@ sweep:
 sim_world: construction_site.world
 
 bag:
-  # 2026-05-20: user records fresh interactively in construction_site.world.
-  # Target path locked here; runner verifies existence before running the sweep.
-  source: 'reuse_path:/tmp/sim_validation_01_bag'
+  # 2026-05-20: bag recorded interactively in construction_site.world over a
+  # 514s traversal covering varied ceiling features (lowered slab, hanging
+  # pipes, ceiling lamps, slab with holes).
+  # 2026-05-21: moved from /tmp (tmpfs, lost on reboot) to ~/ros2_ws/data/ for
+  # persistence. Runner verifies existence before running the sweep.
+  source: 'reuse_path:/home/odesha/ros2_ws/data/sim_validation_01/bag_2026-05-21_construction_site'
   duration_s: 90
   topics:
     - /perception/fused_points
