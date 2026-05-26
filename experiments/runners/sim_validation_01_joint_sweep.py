@@ -347,6 +347,11 @@ def run_one(label: str, ceiling_yaml: pathlib.Path, floor_yaml: pathlib.Path,
         # Additive variance block (None for older metric tools).
         summary["variance"] = m.get("variance")
         summary["variance_core"] = m.get("variance_core")
+        # Additive variance-aware ε block (None if hilda_clearance_field
+        # is not installed in the workspace — the metric script's optional
+        # import path gracefully degrades to null).
+        summary["epsilon"] = m.get("epsilon")
+        summary["epsilon_core"] = m.get("epsilon_core")
         # Derive boundary stats algebraically: SSE_all = SSE_core + SSE_boundary.
         # boundary = all − core (set-wise), so n_b = n_all − n_core.
         try:

@@ -1,0 +1,124 @@
+# sim_validation_02a — variance-aware ε baseline at production geometry
+#
+# First end-to-end exercise of the variance-aware ε prototype kernel
+# (hilda_clearance_field/prototype_kernel.py) on the persistent sim
+# rosbag, via the wire-in to compute_ceiling_metrics.py per ADR 0010.
+#
+# Two questions:
+#
+# 1. Wire-in correctness — does the script translate the published per-cell
+#    σ² into ε(x,y) per 02 §Theory's formula? The kernel unit tests verify
+#    the math in isolation; this experiment verifies the integration end-
+#    to-end on a real bag, via closed-form quantile cross-checks (since
+#    √ is monotonic, ε_p50 − ε_static = λ √σ²_p50 exactly).
+#
+# 2. Production baseline — what's the actual tightening of the variance-
+#    aware margin against the static ε_safety = 0.05 m baseline that
+#    constraint_field_node currently carries? `tightening_post_init_mean`
+#    is the load-bearing number; reports the average extra margin the
+#    variance-aware kernel demands on well-measured surfaces.
+#
+# Metric-script ε parameters stay at canonical defaults (λ=3, δ_cal=0,
+# ε_base=0.05). δ_cal=0 is the sim-phase convention per 02 §Open questions
+# — the partner-facility calibration corpus produces the eventual value;
+# this experiment characterises the variance-driven contribution alone.
+
+sweep:
+  matrix:
+    cell_size: [0.10]
+    sensor_noise_factor: [0.05]
+    enable_edge_sharpen: [true]
+    wall_num_thresh: [20]
+    time_variance: [0.0001]
+    # Single cell. Matches 01d tv=0.0001 / 01c snf050 exactly, so the
+    # elevation + variance baselines reproduce sub-mm / sub-percent.
+
+  floor:
+    resolution: 0.10
+    map_length: 20.0
+    enable_edge_sharpen: true
+    enable_visibility_cleanup: true
+    enable_drift_compensation: true
+    enable_overlap_clearance: true
+
+  ceiling:
+    map_length: 20.0
+    enable_visibility_cleanup: false
+    enable_drift_compensation: false
+    enable_overlap_clearance: false
+    ramped_height_range_a: 0.0
+    ramped_height_range_b: 1.0
+    ramped_height_range_c: 100.0
+    z_low: 2.05
+    z_high: 2.35
+
+sim_world: construction_site.world
+
+bag:
+  source: 'reuse_path:/home/odesha/ros2_ws/data/sim_validation_01/bag_2026-05-21_construction_site'
+  duration_s: 90
+  topics:
+    - /perception/fused_points
+    - /tf
+    - /tf_static
+    - /clock
+  topic_aliases:
+    /perception/fused_points: [/perception/fused_points, /pointcloud/fused_points]
+
+trajectory:
+  description: 'shared with sim_validation_01 / 01b / 01c / 01d — same bag, same trajectory'
+
+ground_truth:
+  script: 'extract_ceiling_ground_truth.py'
+  resample_to_each_cell_size: true
+  output_dir: '/tmp/sim_validation_01_gt'
+
+metrics:
+  script: 'compute_ceiling_metrics.py'
+  partition_metrics: true
+  acceptance_thresholds:
+    rmse_core_max_m: 0.15
+    coverage_min: 0.70
+    max_error_max_m: 0.50
+
+acceptance:
+  # Reproducibility against archived 01d tv=0.0001 cell. Same params +
+  # same bag + same code (modulo the wire-in addition) → sub-mm on
+  # elevation, sub-percent on σ² post-init mean.
+  reproducibility_tolerance_m: 0.005
+  variance_post_init_mean_tolerance_relative: 0.05
+
+  # ε quantile cross-check. Closed-form: epsilon_stats['post_init_p50']
+  # − ε_static = λ √variance_stats['post_init_p50'] (because √ is
+  # monotonic on σ² ≥ 0, the median commutes through the kernel).
+  # Same for p90 on the post-init subset and for p50/p90 on the full
+  # population. Tolerance is tight — this is verifying the wire-in,
+  # not characterising the bag.
+  epsilon_quantile_cross_check_tolerance_m: 0.001
+
+  # Jensen sanity on the post-init mean: ε post_init_mean − ε_static
+  # ≤ λ √(σ² post_init_mean) up to a small slack. By Jensen on √ which
+  # is concave, mean(√σ²) ≤ √(mean σ²).
+  jensen_slack_m: 0.005
+
+  # Tightening sanity bounds at λ=3 against σ² post-init mean ≈ 0.026
+  # (from 01d's tv=0.0001 measurement). The Jensen ceiling is
+  # 3 × √0.026 = 0.484 m; the mean(√σ²) form sits a few cm below.
+  # Floor: at least a few cm — anything smaller would indicate a wire-in
+  # silent failure (defaults read as 0, σ² interpreted as 0, etc.).
+  tightening_post_init_mean_min_m: 0.02
+  tightening_post_init_mean_max_m: 0.50
+
+  # Consistency: init_dominated_frac on ε must match that on variance
+  # (same input set, same threshold). Tolerance covers floating-point
+  # rounding on the n_post_init / n_valid ratio.
+  init_dom_frac_match_tolerance: 0.005
+
+instrumentation:
+  enable_timing_csv: true
+  enable_tegrastats: false
+
+reporting:
+  summary_csv: 'sweep_summary.csv'
+  summary_md: 'sweep_summary.md'
+  postprocess_script: 'sim_validation_02a_postprocess.py'
