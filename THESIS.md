@@ -40,7 +40,7 @@ G3 and G4 are the deepest contribution; G1, G2, G5 are enabling. The architectur
 
 The existing layout stays put. Three new packages at workspace root, plus `thesis/` restructured:
 
-- `hilda_clearance_field/` — clearance + feasibility field node, GPU kernel, CasADi B-spline export. Kept separate from `hilda_ceiling` because both NMPC and HMPC will consume from it.
+- `hilda_clearance_field/` — controller-facing interface to the variance-aware clearance field: CasADi B-spline export, δ_cal calibration scaffolding, and a Python/CuPy prototype of the variance-aware kernel for sim-phase iteration. The runtime publishing node + production GPU kernel live in `hilda_ceiling/ceiling_constraint_field/` (per [decision 0010](docs/decisions/0010-clearance-field-package-boundary.md)); this package owns the interface both NMPC and HMPC consume in-process.
 - `hilda_nmpc/` — acados OCP, Python prototype first, Nav2 controller plugin later. Separate from `hilda_navigation` so controller swaps don't touch the existing nav stack.
 - `hilda_irm/` — offline IRM construction + online approach-aware filtering against the clearance field.
 
