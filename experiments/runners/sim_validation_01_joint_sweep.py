@@ -142,6 +142,10 @@ _LABEL_ENCODERS = {
     "cell_size": lambda v: f"cs{int(v * 100):03d}",
     "enable_edge_sharpen": lambda v: f"es{int(bool(v))}",
     "wall_num_thresh": lambda v: f"wnt{int(v):03d}",
+    # snf005 = 0.005, snf050 = 0.05, snf500 = 0.5 (×1000 for sub-unit values).
+    "sensor_noise_factor": lambda v: f"snf{int(round(v * 1000)):03d}",
+    # tv00000 = 0, tv00100 = 0.0001, tv01000 = 0.001, tv10000 = 0.01 (×1e6 padded).
+    "time_variance": lambda v: f"tv{int(round(v * 1e6)):05d}",
 }
 
 
@@ -340,6 +344,9 @@ def run_one(label: str, ceiling_yaml: pathlib.Path, floor_yaml: pathlib.Path,
         summary["max_core"] = c.get("max_error")
         summary["bias_core"] = c.get("bias")
         summary["n_core"] = c.get("n_compared")
+        # Additive variance block (None for older metric tools).
+        summary["variance"] = m.get("variance")
+        summary["variance_core"] = m.get("variance_core")
         # Derive boundary stats algebraically: SSE_all = SSE_core + SSE_boundary.
         # boundary = all − core (set-wise), so n_b = n_all − n_core.
         try:

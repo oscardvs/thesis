@@ -1,0 +1,124 @@
+# sim_validation_01d — time_variance sweep at production α_d
+#
+# Corroborating experiment for ADR 0009 (variance-pipeline-α_d-diagnostic).
+# 01c's 12× variance ratio across a 100× α_d span was diagnosed at the
+# code level as the √-floor of a Kalman draw-down against time_variance
+# inflation (per-cell σ²_published ≈ √(α_d · z² · time_variance ·
+# update_variance_fps · Δt) in the production regime where measurement
+# variance ≫ inflation rate × inter-observation time).
+#
+# This sweep falsifies or confirms the mechanism empirically by varying
+# time_variance directly while holding α_d at production. Prediction
+# (ADR §Recovery options, at α_d=0.05, z=3m, Δt≈0.4s):
+#
+#   time_variance = 0       → map_v* → 0     (linear draw-down only)
+#   time_variance = 0.0001  → map_v* ≈ 0.010 (production)
+#   time_variance = 0.001   → map_v* ≈ 0.030
+#   time_variance = 0.01    → map_v* ≈ 0.095
+#
+# The √-scaling prediction: σ²(time_variance=0.01) / σ²(time_variance=0.0001)
+# should be ~10× (= √100). The mechanism predicts a clean √-law across the
+# three non-zero cells; the zero-cell tests the linear-only limit.
+#
+# If the measured ratio tracks √(time_variance) within tolerance, F2 in the
+# ADR is confirmed and 02's δ_cal protocol can commit to the freshness-
+# conditional scope. If not, a second mechanism is at work and the
+# calibration design waits.
+
+sweep:
+  matrix:
+    cell_size: [0.10]
+    sensor_noise_factor: [0.05]              # production (settled by 01c)
+    enable_edge_sharpen: [true]              # production
+    wall_num_thresh: [20]                    # production (settled by 01b)
+    time_variance: [0.0, 0.0001, 0.001, 0.01]  # the sweep axis
+    # 4 product runs. The time_variance=0.0001 cell IS the in-sweep
+    # reproducibility check — same parameters as 01c's snf050 cell, which
+    # itself reproduced archived cs010_es1 sub-mm.
+
+  floor:
+    resolution: 0.10
+    map_length: 20.0
+    enable_edge_sharpen: true
+    enable_visibility_cleanup: true
+    enable_drift_compensation: true
+    enable_overlap_clearance: true
+
+  ceiling:
+    map_length: 20.0
+    enable_visibility_cleanup: false
+    enable_drift_compensation: false
+    enable_overlap_clearance: false
+    ramped_height_range_a: 0.0
+    ramped_height_range_b: 1.0
+    ramped_height_range_c: 100.0
+    z_low: 2.05
+    z_high: 2.35
+
+sim_world: construction_site.world
+
+bag:
+  source: 'reuse_path:/home/odesha/ros2_ws/data/sim_validation_01/bag_2026-05-21_construction_site'
+  duration_s: 90
+  topics:
+    - /perception/fused_points
+    - /tf
+    - /tf_static
+    - /clock
+  topic_aliases:
+    /perception/fused_points: [/perception/fused_points, /pointcloud/fused_points]
+
+trajectory:
+  description: 'shared with sim_validation_01 / 01b / 01c — same bag, same trajectory'
+
+ground_truth:
+  script: 'extract_ceiling_ground_truth.py'
+  resample_to_each_cell_size: true
+  output_dir: '/tmp/sim_validation_01_gt'
+
+metrics:
+  script: 'compute_ceiling_metrics.py'
+  partition_metrics: true
+  acceptance_thresholds:
+    rmse_core_max_m: 0.15
+    coverage_min: 0.70
+    max_error_max_m: 0.50
+
+acceptance:
+  # Reproducibility: time_variance=0.0001 cell reproduces 01c snf050.
+  # Same params + same bag + same code → sub-mm. Reference:
+  # sim_validation_01c/alpha_d_sweep__c5f4d00d1572_1b3b5e8/cs010_es1_snf050_wnt020
+  # (RMSE_all=0.3026, RMSE_core=0.2001, σ² post-init mean = 0.026).
+  reproducibility_tolerance_m: 0.005
+
+  # √-scaling test on the three non-zero time_variance cells.
+  # Pairwise predicted ratios under σ² ∝ √(time_variance):
+  #   tv=0.001 / tv=0.0001  → √10 ≈ 3.16×
+  #   tv=0.01  / tv=0.001   → √10 ≈ 3.16×
+  #   tv=0.01  / tv=0.0001  → √100 = 10×
+  # Tolerance: ±50% on each pairwise ratio (predicted 3.16× → measured ∈
+  # [1.6×, 4.7×]; predicted 10× → measured ∈ [5×, 15×]). Wide tolerance
+  # because the prediction is order-of-magnitude — the ratio depends on
+  # within-bag cell observation cadence which is not directly controlled.
+  sqrt_law_tolerance_factor: 0.5
+  variance_metric: 'post_init_mean'
+
+  # time_variance=0 cell: predicted σ² → 0 over the bag (no floor, only
+  # draw-down). Acceptance is one-sided — σ² should be substantially
+  # smaller than the tv=0.0001 cell's σ², not necessarily zero (the bag
+  # is finite, late-arriving cells haven't drawn down fully).
+  zero_inflation_ratio_max: 0.5
+
+  # Elevation residual: time_variance changes the variance state, not the
+  # elevation estimate's equilibrium. RMSE_core should be flat across the
+  # sweep within the 01c-derived noise floor.
+  elevation_rmse_spread_tolerance_m: 0.005
+
+instrumentation:
+  enable_timing_csv: true
+  enable_tegrastats: false
+
+reporting:
+  summary_csv: 'sweep_summary.csv'
+  summary_md: 'sweep_summary.md'
+  postprocess_script: 'sim_validation_01d_postprocess.py'

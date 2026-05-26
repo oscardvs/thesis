@@ -1,0 +1,125 @@
+# sim_validation_01c — sensor_noise_factor (α_d) sweep at production geometry
+#
+# Third experiment in the sim_validation_01 family. 01 settled the geometry
+# operating point (cell=0.10 m production, sweet spot 0.15–0.20 m), 01b
+# settled the threshold operating point (wnt=20, flat across {5,…,50}), and
+# 01c characterises how the published variance layer responds to the LiDAR
+# noise-model parameter — the calibration pre-floor for 02's δ_cal.
+#
+# Per 01 §Sim-phase validation suite: "Sweep three α_d values across an
+# order of magnitude, hold all else fixed, measure how the published
+# variance layer responds and how downstream feasibility-margin behaviour
+# shifts under 02's λ√σ²_c tightening. Establishes the calibration pre-
+# floor for δ_cal: how much of the residual variance the model already
+# captures before any offset is added."
+#
+# Framework parameter: `sensor_noise_factor` (formula at
+# elevation_mapping_cupy/kernels/custom_kernels.py:65 — σ²_meas = α_d · z²).
+# Production value: 0.05 on both floor and ceiling complete configs.
+#
+# Falsifiable prediction. Mean post-init σ² scales linearly with α_d:
+#   mean_var(α_d=0.5) / mean_var(α_d=0.005) ∈ [50, 200]
+# (linear prediction = 100, ratio gate ±2× allowance for fusion-count
+# variation across the bag). Below ⇒ framework clamps σ² independently of
+# α_d ⇒ δ_cal carries weight the model hasn't justified. Above ⇒ additional
+# variance sources are blowing up (drift, fusion math) and the α_d knob is
+# not the full calibration story.
+#
+# Elevation RMSE expected flat across α_d — the Kalman gain shifts but the
+# equilibrium estimate doesn't move much for 100× variance changes. Record
+# but don't interpret.
+
+sweep:
+  matrix:
+    cell_size: [0.10]                       # production
+    sensor_noise_factor: [0.005, 0.05, 0.5] # the sweep axis (100× span)
+    enable_edge_sharpen: [true]             # production
+    wall_num_thresh: [20]                   # production (settled by 01b)
+    # 3 product runs. The α_d=0.05 cell IS the reproducibility check
+    # against archived joint_sweep__04a2e8802fc1_d57b109/cs010_es1 — same
+    # bag, same code path (post-audit), same parameters → sub-mm gate on
+    # elevation RMSE per 01b precedent.
+
+  # Floor instance held at production settings for all runs.
+  floor:
+    resolution: 0.10
+    map_length: 20.0
+    enable_edge_sharpen: true
+    enable_visibility_cleanup: true
+    enable_drift_compensation: true
+    enable_overlap_clearance: true
+
+  # Ceiling defaults shared across all runs; matrix overlays on top.
+  # Mirrors sim_validation_01b/threshold_sweep.yaml ceiling block, minus
+  # the swept keys.
+  ceiling:
+    map_length: 20.0
+    enable_visibility_cleanup: false  # ADR 0005
+    enable_drift_compensation: false  # defensively redundant
+    enable_overlap_clearance: false   # architecturally necessary
+    ramped_height_range_a: 0.0        # exclusion-area neutralised
+    ramped_height_range_b: 1.0
+    ramped_height_range_c: 100.0
+    z_low: 2.05                       # splitter dead-band lower
+    z_high: 2.35                      # splitter dead-band upper
+
+sim_world: construction_site.world
+
+bag:
+  # Reused from sim_validation_01 / 01b — same 514s construction_site
+  # traversal. Persistent location.
+  source: 'reuse_path:/home/odesha/ros2_ws/data/sim_validation_01/bag_2026-05-21_construction_site'
+  duration_s: 90
+  topics:
+    - /perception/fused_points
+    - /tf
+    - /tf_static
+    - /clock
+  topic_aliases:
+    /perception/fused_points: [/perception/fused_points, /pointcloud/fused_points]
+
+trajectory:
+  description: 'shared with sim_validation_01 / 01b — same bag, same trajectory'
+
+ground_truth:
+  # Same GT as cs=0.10 m runs across the 01 family. Runner reuses cache.
+  script: 'extract_ceiling_ground_truth.py'
+  resample_to_each_cell_size: true
+  output_dir: '/tmp/sim_validation_01_gt'
+
+metrics:
+  script: 'compute_ceiling_metrics.py'
+  partition_metrics: true
+  acceptance_thresholds:
+    rmse_core_max_m: 0.15
+    coverage_min: 0.70
+    max_error_max_m: 0.50
+
+acceptance:
+  # Same as 01b: same-bag same-code same-params should agree sub-mm.
+  # |Δ| > reproducibility_tolerance_m on RMSE_all or RMSE_core ⇒ STOP and
+  # investigate. Reference: archived
+  # joint_sweep__04a2e8802fc1_d57b109/cs010_es1
+  # (RMSE_all=0.3026, RMSE_core=0.2001).
+  reproducibility_tolerance_m: 0.005
+
+  # Variance-response check. Predict linear scaling; tolerate 2× either
+  # way to absorb across-bag fusion-count noise. Outside this band is a
+  # finding (clamp on the low side, additional source on the high side).
+  variance_ratio_min: 50.0      # 100× α_d span → 100× σ², allow /2
+  variance_ratio_max: 200.0     # …and ×2
+  variance_metric: 'post_init_mean'  # mean σ² over cells with σ² ≤ init_thresh
+
+  # Elevation residual stability. Not a finding either way — α_d shouldn't
+  # move RMSE_core much. Record the spread; flag only if spread exceeds the
+  # 01b reproducibility-derived noise floor by >10×.
+  elevation_rmse_spread_tolerance_m: 0.005
+
+instrumentation:
+  enable_timing_csv: true
+  enable_tegrastats: false
+
+reporting:
+  summary_csv: 'sweep_summary.csv'
+  summary_md: 'sweep_summary.md'
+  postprocess_script: 'sim_validation_01c_postprocess.py'
