@@ -1,0 +1,138 @@
+# sim_validation_02b — λ-sweep at production geometry
+#
+# Sweeps the variance-aware ε kernel's λ parameter across {1.0, 2.0, 3.0, 4.0}
+# at production framework parameters (cs=0.10, snf=0.05, es=true, wnt=20,
+# tv=0.0001 — identical to 01d's tv=0.0001 cell and to 02a). δ_cal and ε_base
+# stay at the sim-phase canonical defaults (0.0 and 0.05).
+#
+# The kernel is ε(x, y) = ε_base + δ_cal + λ √σ²(x, y), so at fixed framework
+# parameters (same bag, same σ² distribution per cell) the population mean of
+# the post-init tightening is exactly linear in λ:
+#
+#     tightening_post_init_mean(λ) = λ · E[√σ²_post_init]
+#
+# with E[√σ²_post_init] depending only on the σ² distribution and not on λ.
+# This is the falsifiable prediction. The slope `tightening_post_init_mean / λ`
+# is invariant across cells to within σ²-reproducibility tolerance (~5 %
+# relative, from the 02a baseline measurement against archived 01d).
+#
+# Two questions:
+#
+# 1. Linearity check — is the kernel's λ scaling structurally what 02 §Theory
+#    predicts, end-to-end through the script's wire-in? A violation indicates
+#    either a wire-in defect (param not being read), the kernel mis-applying λ,
+#    or σ² drifting between cells (which the per-cell reproducibility check
+#    against the same-bag same-code archived 02a/01d would expose).
+#
+# 2. Sensitivity figure — `tightening_post_init_mean` vs λ across {1, 2, 3, 4}
+#    is the headline thesis figure for 02 §Theory's chance-constraint sensitivity.
+#    At production σ², the slope E[√σ²_post_init] is the slope of the
+#    per-cell margin under the coverage parameter, decoupled from the static
+#    `ε_base` and the calibration offset `δ_cal`.
+#
+# The λ=3.0 cell IS the in-sweep reproducibility check against archived 02a
+# (same bag + same params + same code, modulo the runner's metrics-param
+# pass-through added for 02b). Sub-mm elevation, sub-percent σ², ±5 % on
+# tightening_post_init_mean.
+
+sweep:
+  matrix:
+    cell_size: [0.10]
+    sensor_noise_factor: [0.05]
+    enable_edge_sharpen: [true]
+    wall_num_thresh: [20]
+    time_variance: [0.0001]
+    # λ-sweep. Each value runs as a separate pipeline cell with its own metric
+    # script process; λ enters only through the metrics cmd's `-p lam:=...`
+    # (per the runner's METRICS_PARAM_KEYS plumbing). The ceiling YAMLs are
+    # byte-identical across cells.
+    lam: [1.0, 2.0, 3.0, 4.0]
+    # δ_cal and ε_base could also be swept here, but for 02b they stay at the
+    # script's defaults (δ_cal=0.0, ε_base=0.05). They are declared as
+    # METRICS_PARAM_KEYS in the runner so a future 02c can sweep them.
+
+  floor:
+    resolution: 0.10
+    map_length: 20.0
+    enable_edge_sharpen: true
+    enable_visibility_cleanup: true
+    enable_drift_compensation: true
+    enable_overlap_clearance: true
+
+  ceiling:
+    map_length: 20.0
+    enable_visibility_cleanup: false
+    enable_drift_compensation: false
+    enable_overlap_clearance: false
+    ramped_height_range_a: 0.0
+    ramped_height_range_b: 1.0
+    ramped_height_range_c: 100.0
+    z_low: 2.05
+    z_high: 2.35
+
+sim_world: construction_site.world
+
+bag:
+  source: 'reuse_path:/home/odesha/ros2_ws/data/sim_validation_01/bag_2026-05-21_construction_site'
+  duration_s: 90
+  topics:
+    - /perception/fused_points
+    - /tf
+    - /tf_static
+    - /clock
+  topic_aliases:
+    /perception/fused_points: [/perception/fused_points, /pointcloud/fused_points]
+
+trajectory:
+  description: 'shared with sim_validation_01 / 01b / 01c / 01d / 02a — same bag, same trajectory'
+
+ground_truth:
+  script: 'extract_ceiling_ground_truth.py'
+  resample_to_each_cell_size: true
+  output_dir: '/tmp/sim_validation_01_gt'
+
+metrics:
+  script: 'compute_ceiling_metrics.py'
+  partition_metrics: true
+  acceptance_thresholds:
+    rmse_core_max_m: 0.15
+    coverage_min: 0.70
+    max_error_max_m: 0.50
+
+acceptance:
+  # In-sweep reproducibility of the λ=3 cell against archived 02a (same bag +
+  # same framework params + same code modulo the runner's metrics-param
+  # pass-through). Sub-mm on RMSE, sub-percent on σ² post-init mean.
+  reproducibility_tolerance_m: 0.005
+  variance_post_init_mean_tolerance_relative: 0.05
+  # Tightening at λ=3 against archived 02a's 424.2 mm. Same ±5 % relative.
+  tightening_lam3_tolerance_relative: 0.05
+
+  # Per-cell structural gates — applied to each of the 4 cells independently.
+  # Same tolerances as 02a; these verify the wire-in at each λ.
+  epsilon_quantile_cross_check_tolerance_m: 0.001
+  jensen_slack_m: 0.005
+  init_dom_frac_match_tolerance: 0.005
+
+  # Cross-cell linearity gate. At fixed framework params, σ² is λ-independent,
+  # so the slope E[√σ²_post_init] = tightening_post_init_mean / λ must be
+  # invariant across cells. Tolerance is ±5 % relative — matches the
+  # σ²-reproducibility tolerance (the only inter-cell variation source).
+  linearity_slope_tolerance_relative: 0.05
+
+  # Per-cell tightening must remain in a physically-sensible band. The 02a
+  # baseline at λ=3 is ~424 mm; the linear-scaling prediction across the
+  # sweep is {141, 283, 424, 566} mm. The acceptance bands below are
+  # generous to allow for σ²-cadence drift between runs (the headline gate
+  # is the linearity slope, not the absolute number per cell).
+  tightening_per_cell_min_m: 0.02
+  tightening_per_cell_max_m: 0.80
+
+instrumentation:
+  enable_timing_csv: true
+  enable_tegrastats: false
+
+reporting:
+  summary_csv: 'sweep_summary.csv'
+  summary_md: 'sweep_summary.md'
+  postprocess_script: 'sim_validation_02b_postprocess.py'

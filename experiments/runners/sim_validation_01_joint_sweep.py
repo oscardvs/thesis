@@ -112,6 +112,11 @@ def extract_ground_truth(cell_size: float, world_name: str, out_path: pathlib.Pa
 # (e.g. splitter knobs). Excluded from the elevation YAML overlay.
 NON_ELEVATION_KEYS = {"z_low", "z_high"}
 
+# Axes whose value targets the compute_ceiling_metrics.py ROS-param surface
+# (ε kernel parameters), not the elevation node's YAML. Routed to the metrics
+# cmd as `-p key:=value` in run_one; skipped in render_ceiling_yaml.
+METRICS_PARAM_KEYS = {"lam", "delta_cal", "eps_base"}
+
 
 def _load_base_yaml(base_path: pathlib.Path, root_key: str) -> dict:
     if not base_path.exists():
@@ -146,6 +151,13 @@ _LABEL_ENCODERS = {
     "sensor_noise_factor": lambda v: f"snf{int(round(v * 1000)):03d}",
     # tv00000 = 0, tv00100 = 0.0001, tv01000 = 0.001, tv10000 = 0.01 (×1e6 padded).
     "time_variance": lambda v: f"tv{int(round(v * 1e6)):05d}",
+    # lam10 = 1.0, lam20 = 2.0, lam30 = 3.0, lam40 = 4.0 (×10 padded; allows
+    # half-integer λ values too, e.g. lam15 = 1.5).
+    "lam": lambda v: f"lam{int(round(v * 10)):02d}",
+    # dc000 = 0.0, dc050 = 0.05, dc100 = 0.10 (mm-scale, ×1000).
+    "delta_cal": lambda v: f"dc{int(round(v * 1000)):03d}",
+    # eb050 = 0.050, eb100 = 0.100 (mm-scale, ×1000).
+    "eps_base": lambda v: f"eb{int(round(v * 1000)):03d}",
 }
 
 
@@ -183,8 +195,11 @@ def render_ceiling_yaml(template: dict, run_overrides: dict,
     )
     overrides = dict(template["sweep"]["ceiling"])
     # Apply run-specific axis values. `cell_size` aliases to the ceiling YAML's
-    # `resolution`; every other key is taken as a direct YAML param name.
+    # `resolution`; METRICS_PARAM_KEYS target the metrics-node ROS params (handled
+    # in run_one), not the ceiling YAML; every other key is a direct YAML param.
     for k, v in run_overrides.items():
+        if k in METRICS_PARAM_KEYS:
+            continue
         if k == "cell_size":
             overrides["resolution"] = v
         else:
@@ -228,7 +243,8 @@ def run_one(label: str, ceiling_yaml: pathlib.Path, floor_yaml: pathlib.Path,
             bag_path: pathlib.Path, gt_path: pathlib.Path,
             splitter_z_low: float, splitter_z_high: float,
             out_dir: pathlib.Path, drain_s: float = 5.0,
-            bag_remap: dict[str, str] | None = None) -> dict:
+            bag_remap: dict[str, str] | None = None,
+            metrics_params: dict | None = None) -> dict:
     """Launch + replay + collect for one matrix cell."""
     out_dir.mkdir(parents=True, exist_ok=True)
     logs = out_dir / "logs"
@@ -287,6 +303,12 @@ def run_one(label: str, ceiling_yaml: pathlib.Path, floor_yaml: pathlib.Path,
             "-p", "num_samples:=100000",
         ],
     }
+
+    # Append per-run metrics ROS-params (ε kernel: lam, delta_cal, eps_base).
+    # The script's declare_parameter() defaults are honoured when the key is
+    # absent from this dict.
+    for k, v in (metrics_params or {}).items():
+        cmds["metrics"] += ["-p", f"{k}:={v}"]
 
     procs: dict[str, subprocess.Popen] = {}
     try:
@@ -606,11 +628,19 @@ def main() -> int:
             )
             continue
 
+        # Split run_overrides into elevation-YAML axes (handled by
+        # render_ceiling_yaml above) vs metrics-node ROS-params (forwarded
+        # into the metrics cmd).
+        metrics_params = {
+            k: v for k, v in run_overrides.items() if k in METRICS_PARAM_KEYS
+        }
+
         print(f"\n=== {label} ===")
         result = run_one(
             label, ceiling_yaml, floor_yaml, bag_path,
             gt_paths[run_overrides["cell_size"]],
             z_low, z_high, run_out, bag_remap=bag_remap,
+            metrics_params=metrics_params,
         )
         result["label"] = label
         result["run_overrides"] = dict(run_overrides)
