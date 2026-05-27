@@ -70,15 +70,20 @@ def reproducibility_block(
         "",
     ]
     if not archived:
-        lines.append(
-            "Archived baseline not loadable — reproducibility check skipped."
-        )
+        lines += [
+            "Archived baseline not loadable — reproducibility check skipped. "
+            "Current-run numbers stand on their own; no comparison made.",
+            "",
+            "**Verdict:** **SKIPPED** (no archive).",
+        ]
         return lines, True
     if not prod_run:
-        lines.append(
+        lines += [
             "Production time_variance=0.0001 run missing from this sweep — "
-            "cannot run reproducibility check."
-        )
+            "cannot run reproducibility check.",
+            "",
+            "**Verdict:** **FAIL** (production cell missing).",
+        ]
         return lines, False
     ra_new = prod_run.get("RMSE_all")
     rc_new = prod_run.get("RMSE_core")
@@ -87,22 +92,29 @@ def reproducibility_block(
     v_new = (prod_run.get("variance") or {}).get("post_init_mean")
     v_arc = (archived.get("variance") or {}).get("post_init_mean")
     if None in (ra_new, rc_new, ra_arc, rc_arc):
-        lines.append(
-            "Missing RMSE values — cannot compute reproducibility deltas."
-        )
+        lines += [
+            "Missing RMSE values — cannot compute reproducibility deltas.",
+            "",
+            "**Verdict:** **FAIL** (RMSE inputs missing).",
+        ]
         return lines, False
     d_a = ra_new - ra_arc
     d_c = rc_new - rc_arc
-    var_str = "—"
-    var_pass = True
     if v_new is not None and v_arc is not None and v_arc > 0:
         d_v_rel = (v_new - v_arc) / v_arc
         var_str = f"{v_new:.4g} vs {v_arc:.4g} (Δrel = {d_v_rel * 100:+.1f}%)"
         # σ² reproducibility tolerance: ±5% relative.
         var_pass = abs(d_v_rel) <= 0.05
+        var_ran = True
+    else:
+        var_str = "N/A (variance fields missing)"
+        # Skipped sub-check does not claim PASS — surfaced in the verdict.
+        var_pass = True
+        var_ran = False
     elev_pass = abs(d_a) <= tol_m and abs(d_c) <= tol_m
     passed = elev_pass and var_pass
-    verdict = "PASS" if passed else "**FAIL — STOP and investigate**"
+    skipped_note = " (σ² check skipped — variance fields missing)" if not var_ran else ""
+    verdict = "**PASS**" if passed else "**FAIL — STOP and investigate**"
     lines += [
         f"Tolerance: ±{tol_m * 1000:.1f} mm on RMSE_all and RMSE_core; "
         "±5% relative on post-init mean σ².",
@@ -113,7 +125,7 @@ def reproducibility_block(
         f"| RMSE_core | {_fmt(rc_new)} | {_fmt(rc_arc)} | {_fmt_mm(d_c)} mm |",
         f"| σ² post-init mean | — | — | {var_str} |",
         "",
-        f"**Verdict:** {verdict}",
+        f"**Verdict:** {verdict}{skipped_note}",
     ]
     if not passed:
         lines += [

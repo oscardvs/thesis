@@ -79,26 +79,32 @@ def reproducibility_block(
         "",
     ]
     if not archived:
-        lines.append(
+        lines += [
             "Archived baseline not loadable — reproducibility check skipped. "
-            "The α_d=0.05 numbers stand on their own."
-        )
+            "The α_d=0.05 numbers stand on their own; no comparison made.",
+            "",
+            "**Verdict:** **SKIPPED** (no archive).",
+        ]
         return lines, True
     if not prod_run:
-        lines.append(
+        lines += [
             "Production α_d=0.05 run missing from this sweep — cannot run "
-            "reproducibility check. Verify the sweep matrix includes α_d=0.05."
-        )
+            "reproducibility check. Verify the sweep matrix includes α_d=0.05.",
+            "",
+            "**Verdict:** **FAIL** (production cell missing).",
+        ]
         return lines, False
     ra_new = prod_run.get("RMSE_all")
     rc_new = prod_run.get("RMSE_core")
     ra_arc = archived.get("RMSE_all")
     rc_arc = archived.get("RMSE_core")
     if None in (ra_new, rc_new, ra_arc, rc_arc):
-        lines.append(
+        lines += [
             "Missing RMSE values — cannot compute reproducibility deltas. "
-            "Check inputs manually."
-        )
+            "Check inputs manually.",
+            "",
+            "**Verdict:** **FAIL** (RMSE inputs missing).",
+        ]
         return lines, False
     d_a = ra_new - ra_arc
     d_c = rc_new - rc_arc

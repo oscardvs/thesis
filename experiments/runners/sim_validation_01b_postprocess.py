@@ -62,20 +62,24 @@ def reproducibility_block(
     """Build the reproducibility-check section and a pass/fail flag."""
     lines = ["", "## Reproducibility check (F-baseline vs archived cs015_es0)", ""]
     if not archived:
-        lines.append(
+        lines += [
             "Archived baseline not loadable — reproducibility check skipped. "
-            "The F-baseline numbers stand on their own."
-        )
+            "The F-baseline numbers stand on their own; no comparison made.",
+            "",
+            "**Verdict:** **SKIPPED** (no archive).",
+        ]
         return lines, True
     rb_new = f_baseline.get("RMSE_boundary")
     rc_new = f_baseline.get("RMSE_core")
     rb_arc = archived.get("RMSE_boundary")
     rc_arc = archived.get("RMSE_core")
     if None in (rb_new, rc_new, rb_arc, rc_arc):
-        lines.append(
+        lines += [
             "Missing RMSE values in F-baseline or archived summary — cannot "
-            "compute reproducibility deltas. Check inputs manually."
-        )
+            "compute reproducibility deltas. Check inputs manually.",
+            "",
+            "**Verdict:** **FAIL** (RMSE inputs missing).",
+        ]
         return lines, False
     d_b = rb_new - rb_arc
     d_c = rc_new - rc_arc

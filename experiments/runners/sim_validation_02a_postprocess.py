@@ -71,12 +71,19 @@ def reproducibility_block(
 ) -> tuple[list[str], bool]:
     lines = _section("Reproducibility (vs archived 01d tv=0.0001)")
     if not archived:
-        lines.append(
-            "Archived baseline not loadable — reproducibility check skipped."
-        )
+        lines += [
+            "Archived baseline not loadable — reproducibility check skipped. "
+            "The current-run numbers stand on their own; no comparison made.",
+            "",
+            "Verdict: **SKIPPED** (no archive).",
+        ]
         return lines, True
     if not summary:
-        lines.append("This run's summary.json is empty — cannot compare.")
+        lines += [
+            "This run's summary.json is empty — cannot compare.",
+            "",
+            "Verdict: **FAIL** (current summary missing).",
+        ]
         return lines, False
 
     # Runner-produced summary.json carries RMSE flat at top level
@@ -100,14 +107,19 @@ def reproducibility_block(
     arc_var = (archived.get("variance") or {}).get("post_init_mean")
     if cur_var is not None and arc_var is not None and arc_var > 0:
         var_rel = abs(cur_var - arc_var) / arc_var
+        var_ran = True
     else:
         var_rel = None
+        var_ran = False
 
     rmse_pass = (
         d_all is not None and abs(d_all) <= tol_m
         and d_core is not None and abs(d_core) <= tol_m)
-    var_pass = var_rel is None or var_rel <= var_tol_rel
+    # var_pass: only contributes a FAIL if it actually ran; skipped does not
+    # claim PASS — surfaced separately in the verdict line.
+    var_pass = (not var_ran) or var_rel <= var_tol_rel
     passed = rmse_pass and var_pass
+    skipped_note = " (σ² check skipped — variance fields missing)" if not var_ran else ""
 
     lines += [
         f"- RMSE_all:  current = {_fmt(cur_rmse_all)} m, "
@@ -118,10 +130,10 @@ def reproducibility_block(
         f"(tol ±{int(tol_m*1000)} mm)",
         f"- σ² post-init mean: current = {_fmt(cur_var, prec=6)}, "
         f"archived = {_fmt(arc_var, prec=6)}, "
-        f"relative Δ = {(_fmt(var_rel*100, prec=1) + ' %') if var_rel is not None else '—'} "
+        f"relative Δ = {(_fmt(var_rel*100, prec=1) + ' %') if var_rel is not None else 'N/A'} "
         f"(tol ±{int(var_tol_rel*100)} %)",
         "",
-        f"Verdict: {_verdict(passed)}.",
+        f"Verdict: {_verdict(passed)}{skipped_note}.",
     ]
     return lines, passed
 
@@ -159,11 +171,16 @@ def quantile_cross_check_block(
         ("p90, post-init", eps.get("post_init_p90"), var.get("post_init_p90")),
     ]
     all_pass = True
+    missing_count = 0
     lines.append("| quantile          | ε measured | λ √σ²    | Δ [mm] | tol [mm] | pass |")
     lines.append("|-------------------|-----------:|---------:|-------:|---------:|:----:|")
     for label, eps_q, var_q in checks:
         if eps_q is None or var_q is None:
-            lines.append(f"| {label:<17} | — | — | — | {int(tol_m*1000)} | — |")
+            # A missing quantile means the runner / wire-in did not write the
+            # expected field — fail loudly rather than silently skipping.
+            missing_count += 1
+            all_pass = False
+            lines.append(f"| {label:<17} | N/A | N/A | N/A | {int(tol_m*1000)} | ✗ |")
             continue
         predicted = eps_static + lam * math.sqrt(max(var_q, 0.0))
         delta = eps_q - predicted
@@ -177,14 +194,21 @@ def quantile_cross_check_block(
     lines += [
         "",
         f"Verdict: {_verdict(all_pass)}.",
-        (
-            ""
-            if all_pass
-            else "Failure indicates the wire-in is not faithfully invoking the "
-            "kernel — inspect compute_ceiling_metrics.py's parameter "
-            "reads, subset selection, or call signature."
-        ),
     ]
+    if not all_pass:
+        if missing_count > 0:
+            lines.append(
+                f"Failure includes {missing_count} missing quantile(s) — the "
+                "wire-in did not produce one or more expected fields. "
+                "Verify compute_ceiling_metrics.py's epsilon_stats output and "
+                "the runner's `_run_single_cell` projection step."
+            )
+        else:
+            lines.append(
+                "Failure indicates the wire-in is not faithfully invoking the "
+                "kernel — inspect compute_ceiling_metrics.py's parameter "
+                "reads, subset selection, or call signature."
+            )
     return lines, all_pass
 
 
@@ -200,8 +224,18 @@ def jensen_bound_block(
     lam = (eps.get("params") or {}).get("lam")
     if (eps_post_mean is None or var_post_mean is None
             or eps_static is None or lam is None):
-        lines.append("Required fields missing — Jensen check skipped.")
-        return lines, True
+        # Required wire-in fields missing — fail loudly rather than silently
+        # claiming PASS. The runner is supposed to produce every field this
+        # block reads; absence means the wire-in or projection step is broken.
+        lines += [
+            "Required fields missing — Jensen check cannot run. "
+            "Verify the ε block in summary.json carries post_init_mean, "
+            "eps_static, and params.lam (and the variance block carries "
+            "post_init_mean).",
+            "",
+            "Verdict: **FAIL** (inputs missing).",
+        ]
+        return lines, False
 
     tightening_mean = eps_post_mean - eps_static
     jensen_ceiling = lam * math.sqrt(max(var_post_mean, 0.0))

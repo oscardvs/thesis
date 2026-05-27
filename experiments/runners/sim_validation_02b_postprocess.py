@@ -90,10 +90,19 @@ def in_sweep_reproducibility_block(
     lines = _section("In-sweep reproducibility (λ=3 cell vs archived 02a)")
     cur = cells_by_lam.get(3.0)
     if cur is None:
-        lines.append("λ=3 cell not present in sweep — reproducibility check cannot run.")
+        lines += [
+            "λ=3 cell not present in sweep — reproducibility check cannot run.",
+            "",
+            "Verdict: **FAIL** (λ=3 cell missing).",
+        ]
         return lines, False
     if not archived:
-        lines.append("Archived 02a baseline not loadable — reproducibility check skipped.")
+        lines += [
+            "Archived 02a baseline not loadable — reproducibility check skipped. "
+            "No comparison made.",
+            "",
+            "Verdict: **SKIPPED** (no archive).",
+        ]
         return lines, True
 
     cur_rmse_all = cur.get("RMSE_all")
@@ -107,21 +116,36 @@ def in_sweep_reproducibility_block(
     arc_var = (archived.get("variance") or {}).get("post_init_mean")
     if cur_var is not None and arc_var is not None and arc_var > 0:
         var_rel = abs(cur_var - arc_var) / arc_var
+        var_ran = True
     else:
         var_rel = None
+        var_ran = False
 
     cur_tight = (cur.get("epsilon") or {}).get("tightening_post_init_mean")
     arc_tight = (archived.get("epsilon") or {}).get("tightening_post_init_mean")
     if cur_tight is not None and arc_tight is not None and arc_tight > 0:
         tight_rel = abs(cur_tight - arc_tight) / arc_tight
+        tight_ran = True
     else:
         tight_rel = None
+        tight_ran = False
 
     rmse_pass = (d_all is not None and abs(d_all) <= rmse_tol
                  and d_core is not None and abs(d_core) <= rmse_tol)
-    var_pass = var_rel is None or var_rel <= var_tol_rel
-    tight_pass = tight_rel is None or tight_rel <= tight_tol_rel
+    # Skipped sub-checks don't claim PASS — surfaced in the verdict line.
+    var_pass = (not var_ran) or var_rel <= var_tol_rel
+    tight_pass = (not tight_ran) or tight_rel <= tight_tol_rel
     passed = rmse_pass and var_pass and tight_pass
+
+    skipped: list[str] = []
+    if not var_ran:
+        skipped.append("σ²")
+    if not tight_ran:
+        skipped.append("tightening")
+    skipped_note = (
+        f" ({'/'.join(skipped)} check(s) skipped — fields missing)"
+        if skipped else ""
+    )
 
     lines += [
         f"- RMSE_all:  current = {_fmt(cur_rmse_all)} m, "
@@ -132,14 +156,14 @@ def in_sweep_reproducibility_block(
         f"(tol ±{int(rmse_tol*1000)} mm)",
         f"- σ² post-init mean: current = {_fmt(cur_var, prec=6)}, "
         f"archived = {_fmt(arc_var, prec=6)}, "
-        f"relative Δ = {(_fmt(var_rel*100, prec=1) + ' %') if var_rel is not None else '—'} "
+        f"relative Δ = {(_fmt(var_rel*100, prec=1) + ' %') if var_rel is not None else 'N/A'} "
         f"(tol ±{int(var_tol_rel*100)} %)",
         f"- tightening_post_init_mean: current = {_fmt(cur_tight, prec=5)} m, "
         f"archived = {_fmt(arc_tight, prec=5)} m, "
-        f"relative Δ = {(_fmt(tight_rel*100, prec=1) + ' %') if tight_rel is not None else '—'} "
+        f"relative Δ = {(_fmt(tight_rel*100, prec=1) + ' %') if tight_rel is not None else 'N/A'} "
         f"(tol ±{int(tight_tol_rel*100)} %)",
         "",
-        f"Verdict: {_verdict(passed)}.",
+        f"Verdict: {_verdict(passed)}{skipped_note}.",
     ]
     return lines, passed
 
@@ -209,6 +233,7 @@ def per_cell_jensen_block(
 ) -> tuple[list[str], bool]:
     lines = _section("Per-cell Jensen bound on post-init mean")
     all_pass = True
+    missing_cells = 0
     lines.append("| λ | tightening [mm] | λ √σ²_mean [mm] | gap [mm] | pass |")
     lines.append("|--:|---------------:|---------------:|--------:|:----:|")
     for lam in sorted(cells_by_lam.keys()):
@@ -221,7 +246,10 @@ def per_cell_jensen_block(
         lam_runtime = (eps.get("params") or {}).get("lam")
         if (eps_post_mean is None or var_post_mean is None
                 or eps_static is None or lam_runtime is None):
-            lines.append(f"| {lam:.1f} | — | — | — | — |")
+            # Required wire-in field missing for this cell — fail loudly.
+            missing_cells += 1
+            all_pass = False
+            lines.append(f"| {lam:.1f} | N/A | N/A | N/A | ✗ |")
             continue
         tightening = eps_post_mean - eps_static
         ceiling = lam_runtime * math.sqrt(max(var_post_mean, 0.0))
@@ -236,7 +264,9 @@ def per_cell_jensen_block(
     lines += [
         "",
         f"Tolerance: gap ≥ −{int(slack_m*1000)} mm (non-negative is expected by Jensen).",
-        f"Verdict: {_verdict(all_pass)}.",
+        f"Verdict: {_verdict(all_pass)}"
+        + (f" ({missing_cells} cell(s) missing required fields)" if missing_cells else "")
+        + ".",
     ]
     return lines, all_pass
 
@@ -246,6 +276,7 @@ def per_cell_consistency_block(
 ) -> tuple[list[str], bool]:
     lines = _section("Per-cell ε vs variance init_dominated_frac consistency")
     all_pass = True
+    missing_cells = 0
     lines.append("| λ | ε.init_dom % | var.init_dom % | |Δ| % | pass |")
     lines.append("|--:|-------------:|--------------:|-----:|:----:|")
     for lam in sorted(cells_by_lam.keys()):
@@ -255,7 +286,9 @@ def per_cell_consistency_block(
         f_eps = eps.get("init_dominated_frac")
         f_var = var.get("init_dominated_frac")
         if f_eps is None or f_var is None:
-            lines.append(f"| {lam:.1f} | — | — | — | — |")
+            missing_cells += 1
+            all_pass = False
+            lines.append(f"| {lam:.1f} | N/A | N/A | N/A | ✗ |")
             continue
         diff = abs(f_eps - f_var)
         ok = diff <= tol
@@ -268,7 +301,9 @@ def per_cell_consistency_block(
     lines += [
         "",
         f"Tolerance: ±{tol*100:.1f} %.",
-        f"Verdict: {_verdict(all_pass)}.",
+        f"Verdict: {_verdict(all_pass)}"
+        + (f" ({missing_cells} cell(s) missing required fields)" if missing_cells else "")
+        + ".",
     ]
     return lines, all_pass
 
@@ -285,17 +320,23 @@ def cross_cell_linearity_block(
     """
     lines = _section("Cross-cell linearity (tightening / λ invariance — headline structural gate)")
     slopes: list[tuple[float, float, float]] = []  # (lam, tightening, slope)
+    missing_cells = 0
     for lam in sorted(cells_by_lam.keys()):
         cell = cells_by_lam[lam]
         eps = cell.get("epsilon") or {}
         tightening = eps.get("tightening_post_init_mean")
         lam_runtime = (eps.get("params") or {}).get("lam")
         if tightening is None or lam_runtime is None or lam_runtime == 0:
+            missing_cells += 1
             continue
         slopes.append((lam_runtime, tightening, tightening / lam_runtime))
 
     if len(slopes) < 2:
-        lines.append("Fewer than 2 cells with valid slopes — linearity check skipped.")
+        lines += [
+            "Fewer than 2 cells with valid slopes — linearity check cannot run.",
+            "",
+            f"Verdict: **FAIL** ({missing_cells} cell(s) missing required fields).",
+        ]
         return lines, False
 
     slope_values = [s for _, _, s in slopes]
@@ -320,13 +361,19 @@ def cross_cell_linearity_block(
             f"| {lam_runtime:.1f} | {tightening*1000:.2f} | "
             f"{slope*1000:.3f} | {rel_str} |"
         )
+    # Cells with missing fields are excluded from the linearity gate; they
+    # cannot pass it (their slope is unknown), so flip the overall verdict.
+    if missing_cells:
+        all_pass = False
     lines += [
         "",
         f"Median slope E[√σ²_post_init] = {median_slope*1000:.3f} mm "
         f"(spread = {spread*1000:.3f} mm = "
         f"{(spread_rel*100) if spread_rel is not None else float('nan'):.2f} % rel).",
         f"Tolerance: each cell's slope within ±{tol_rel*100:.1f} % of median.",
-        f"Verdict: {_verdict(all_pass)}.",
+        f"Verdict: {_verdict(all_pass)}"
+        + (f" ({missing_cells} cell(s) missing required fields)" if missing_cells else "")
+        + ".",
     ]
     if not all_pass:
         lines.append(
@@ -352,6 +399,7 @@ def headline_sensitivity_block(
         "------------------------------:|:--------:|",
     ]
     all_in_range = True
+    missing_cells = 0
     for lam in sorted(cells_by_lam.keys()):
         cell = cells_by_lam[lam]
         eps = cell.get("epsilon") or {}
@@ -360,7 +408,9 @@ def headline_sensitivity_block(
         tpimax = eps.get("tightening_post_init_max")
         var_pim = var.get("post_init_mean")
         if tpim is None:
-            lines.append(f"| {lam:.1f} | — | — | — | — |")
+            missing_cells += 1
+            all_in_range = False
+            lines.append(f"| {lam:.1f} | N/A | N/A | N/A | ✗ |")
             continue
         in_range = per_cell_min_m <= tpim <= per_cell_max_m
         if not in_range:
@@ -375,7 +425,10 @@ def headline_sensitivity_block(
         "",
         f"Per-cell sanity band: [{int(per_cell_min_m*1000)}, "
         f"{int(per_cell_max_m*1000)}] mm.",
-        f"Verdict: {_verdict(all_in_range)}.",
+        f"Verdict: {_verdict(all_in_range)}"
+        + (f" ({missing_cells} cell(s) missing tightening_post_init_mean)"
+           if missing_cells else "")
+        + ".",
     ]
     return lines, all_in_range
 
