@@ -11,8 +11,8 @@ ocp:
   tf: 4.0
   constraint_mode: soft
   barrier: "off"
-  zl: 1.0e3
-  Zl: 1.0e1
+  zl: 1000.0
+  Zl: 10.0
   u_s_max: 0.30
   q_s_e: 0.0
 scene:

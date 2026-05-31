@@ -7,8 +7,8 @@ ocp:
   tf: 4.0
   constraint_mode: soft
   barrier: "off"
-  zl: 1.0e3
-  Zl: 1.0e1
+  zl: 1000.0
+  Zl: 10.0
   u_s_max: 0.30
   q_s_e: 20.0          # terminal s-task ACTIVE
 scene:
@@ -20,7 +20,7 @@ scene:
   goal_x: 4.0
   s_goal: 0.50         # re-extend to a drilling height past the beam
   fixed_s: false
-  sim_time: 16.0
+  sim_time: 24.0       # base parks ~8s, slow sledge re-extends to s_goal by ~12.4s
 gates:
   scene_kind: controller
   reach_tol: 0.15
