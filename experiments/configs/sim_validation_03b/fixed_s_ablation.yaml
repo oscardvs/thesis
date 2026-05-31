@@ -1,0 +1,33 @@
+# sim_validation_03b — fixed-s ablation: the joint-optimisation hypothesis.
+# Same scene as 03a, but s is frozen at s_nominal (fixed_s: true). With the soft
+# controller's high slack penalty the fixed-s controller STALLS at the beam edge
+# (cannot lower s, cannot proceed without violating clearance) -- it does not
+# reach the goal. The experiment PASSES its hypothesis when fixed-s cannot reach
+# while feasible (gate scene_kind: ablation -> hypothesis_confirmed =
+# not(reach and feasible)). Lit-review research-plan Phase 3: profiled against a
+# fixed-s baseline. The citable contrast vs 03a.
+ocp:
+  N: 40
+  tf: 4.0
+  constraint_mode: soft
+  barrier: "off"
+  zl: 1.0e3
+  Zl: 1.0e1
+  u_s_max: 0.30
+  q_s_e: 0.0
+scene:
+  name: fixed_s_ablation
+  beam_x_center: 2.0
+  beam_x_halfwidth: 0.30
+  beam_z_ceil: 2.40
+  s_nominal: 0.50
+  goal_x: 4.0
+  s_goal: 0.0
+  fixed_s: true        # the ablation
+  sim_time: 16.0
+gates:
+  scene_kind: ablation
+  reach_tol: 0.15
+  f_tol: 0.05
+  s_drop_min: 0.05
+  solve_time_p95_max: 0.05

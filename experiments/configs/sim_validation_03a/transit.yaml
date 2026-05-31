@@ -1,0 +1,29 @@
+# sim_validation_03a — transit: the sledge lowers to clear a too-low beam.
+# Isolates the G3 path-constraint -> configuration coupling. Terminal s-task
+# inactive (q_s_e=0); the robot starts at s_nominal and r_us inertia keeps it
+# there until the beam forces a dip. PASS = reach AND feasible AND s_lowering.
+ocp:
+  N: 40
+  tf: 4.0
+  constraint_mode: soft
+  barrier: "off"
+  zl: 1.0e3
+  Zl: 1.0e1
+  u_s_max: 0.30        # PLACEHOLDER conservative (folds q1/q2)
+  q_s_e: 0.0           # terminal s-task inactive in transit
+scene:
+  name: transit
+  beam_x_center: 2.0
+  beam_x_halfwidth: 0.30
+  beam_z_ceil: 2.40
+  s_nominal: 0.50
+  goal_x: 4.0
+  s_goal: 0.0
+  fixed_s: false
+  sim_time: 16.0
+gates:
+  scene_kind: controller
+  reach_tol: 0.15
+  f_tol: 0.05
+  s_drop_min: 0.05
+  solve_time_p95_max: 0.05
