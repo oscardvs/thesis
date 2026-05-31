@@ -115,5 +115,6 @@ Three NMPC-design consequences worth pinning. (i) NMPC input bounds are **contro
 ## Cross-references
 
 - 02 — variance-aware clearance field (supplies `f` and its CasADi B-spline)
+- `hilda_clearance_field/clearance_spline.py` — the CasADi B-spline export of `f(x, y, s[, h])` + analytic gradient (ADR-0010 #1) landed 2026-05-30; composes `f = c − ε − H` (`H = h + 1.899 + s`, so a 6↔7-state switch needs no re-fit) and is acados-`con_h_expr`-gate verified. Design: [spec](superpowers/specs/2026-05-30-clearance-spline-export-design.md), [ADR 0013](decisions/0013-clearance-spline-interface.md)
 - 04 — approach-aware IRM (consumes the OCP forward-simulation to verify approach-corridor feasibility)
 - 05 — embedded deployment (the controller is the dominant latency contributor in Table 6)
